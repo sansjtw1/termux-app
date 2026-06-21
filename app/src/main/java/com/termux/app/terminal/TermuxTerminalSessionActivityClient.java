@@ -378,11 +378,24 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
                 workingDirectory = currentSession.getCwd();
             }
 
-            TermuxSession newTermuxSession = service.createTermuxSession(null, null, null, workingDirectory, isFailSafe, sessionName);
-            if (newTermuxSession == null) return;
+            // Auto-start Ankali environment if startup script exists
+            String startupScript = mActivity.getFilesDir() + "/home/start-kali.sh";
+            if (new java.io.File(startupScript).exists() && !isFailSafe) {
+                // Execute the Ankali startup script
+                TermuxSession newTermuxSession = service.createTermuxSession(
+                    startupScript, null, null, workingDirectory, false, sessionName);
+                if (newTermuxSession == null) return;
 
-            TerminalSession newTerminalSession = newTermuxSession.getTerminalSession();
-            setCurrentSession(newTerminalSession);
+                TerminalSession newTerminalSession = newTermuxSession.getTerminalSession();
+                setCurrentSession(newTerminalSession);
+            } else {
+                // Default behavior: create normal shell session
+                TermuxSession newTermuxSession = service.createTermuxSession(null, null, null, workingDirectory, isFailSafe, sessionName);
+                if (newTermuxSession == null) return;
+
+                TerminalSession newTerminalSession = newTermuxSession.getTerminalSession();
+                setCurrentSession(newTerminalSession);
+            }
 
             mActivity.getDrawer().closeDrawers();
         }
