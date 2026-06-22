@@ -13,7 +13,7 @@ ext {
 }
 
 android {
-    namespace "com.termux"
+    namespace "com.kalinrx"
 
     compileSdkVersion project.properties.compileSdkVersion.toInteger()
     ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: project.properties.ndkVersion
@@ -51,14 +51,14 @@ android {
 
         buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\"" // Used by TermuxApplication class
 
-        manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.termux"
-        manifestPlaceholders.TERMUX_APP_NAME = "Termux"
-        manifestPlaceholders.TERMUX_API_APP_NAME = "Termux:API"
-        manifestPlaceholders.TERMUX_BOOT_APP_NAME = "Termux:Boot"
-        manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "Termux:Float"
-        manifestPlaceholders.TERMUX_STYLING_APP_NAME = "Termux:Styling"
-        manifestPlaceholders.TERMUX_TASKER_APP_NAME = "Termux:Tasker"
-        manifestPlaceholders.TERMUX_WIDGET_APP_NAME = "Termux:Widget"
+        manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.kalinrx"
+        manifestPlaceholders.TERMUX_APP_NAME = "AnKali"
+        manifestPlaceholders.TERMUX_API_APP_NAME = "AnKali:API"
+        manifestPlaceholders.TERMUX_BOOT_APP_NAME = "AnKali:Boot"
+        manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "AnKali:Float"
+        manifestPlaceholders.TERMUX_STYLING_APP_NAME = "AnKali:Styling"
+        manifestPlaceholders.TERMUX_TASKER_APP_NAME = "AnKali:Tasker"
+        manifestPlaceholders.TERMUX_WIDGET_APP_NAME = "AnKali:Widget"
 
         externalNativeBuild {
             ndkBuild {
@@ -132,10 +132,10 @@ android {
         variant.outputs.all { output ->
             if (variant.buildType.name == "debug") {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "debug") + "_" + (abi ? abi : "universal") + ".apk")
+                outputFileName = new File("ankali_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "debug") + "_" + (abi ? abi : "universal") + ".apk")
             } else if (variant.buildType.name == "release") {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
+                outputFileName = new File("ankali_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
             }
         }
     }
@@ -232,6 +232,71 @@ task downloadBootstraps() {
             downloadBootstrap("x86_64", "615b590679ee6cd885b7fd2ff9473c845e920f9b422f790bb158c63fe42b8481", version)
         } else {
             throw new GradleException("Unsupported TERMUX_PACKAGE_VARIANT \"" + packageVariant + "\"")
+        }
+    }
+}
+
+def downloadKaliImage(String url, String destPath) {
+    logger.quiet("Downloading Kali image from: " + url)
+
+    def file = new File(destPath)
+    file.parentFile?.mkdirs()
+
+    try {
+        def connection = new URL(url).openConnection()
+        connection.setInstanceFollowRedirects(true)
+        connection.setConnectTimeout(30000)
+        connection.setReadTimeout(60000)
+
+        // Check for proxy and handle it
+        def proxyHost = System.getenv("http_proxy_host")
+        def proxyPort = System.getenv("http_proxy_port")
+        if (proxyHost && proxyPort) {
+            logger.quiet("Using proxy: " + proxyHost + ":" + proxyPort)
+        }
+
+        def inputStream = connection.inputStream
+        def outputStream = new BufferedOutputStream(new FileOutputStream(file))
+
+        byte[] buffer = new byte[8192]
+        int count
+        long downloaded = 0
+
+        while ((count = inputStream.read(buffer)) != -1) {
+            outputStream.write(buffer, 0, count)
+            downloaded += count
+            if (downloaded % (1024 * 1024 * 50) == 0) { // Log every 50MB
+                logger.quiet("Downloaded: " + (downloaded / (1024 * 1024)) + " MB")
+            }
+        }
+
+        outputStream.close()
+        inputStream.close()
+
+        logger.quiet("Download complete: " + destPath)
+        return true
+    } catch (Exception e) {
+        logger.error("Download failed: " + e.message)
+        file.delete()
+        return false
+    }
+}
+
+task downloadKaliArm64() {
+    doLast {
+        def kaliUrl = System.getenv("KALI_IMAGE_URL") ?: "https://github.dpik.top/https://github.com/sansjtw1/Ankali-app/releases/download/kali-arm64/kali-arm64.tar.xz"
+        def destPath = "src/main/assets/kali-arm64.tar.xz"
+
+        // Disable proxy for this download if needed
+        def originalProxy = System.getenv("http_proxy")
+        if (originalProxy) {
+            logger.quiet("Detected proxy: " + originalProxy)
+        }
+
+        if (downloadKaliImage(kaliUrl, destPath)) {
+            logger.quiet("Kali image downloaded successfully")
+        } else {
+            logger.warn("Failed to download Kali image. The app will try to download it on first run.")
         }
     }
 }

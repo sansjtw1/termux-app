@@ -1,0 +1,445 @@
+#!/bin/bash
+# Copyright (c) 2024 Ankali SansJtw
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# Email: sansjtw@163.com, sansjtw1@gmail.com
+
+# Set log file path
+LOG_DIR="/.kali-config/log"
+LOG_FILE="$LOG_DIR/$(date +'%Y-%m-%d').log"
+
+# Create log directory
+mkdir -p "$LOG_DIR"
+
+# Define log function
+log() {
+    echo -e "$1" >> "$LOG_FILE"
+    echo -e "$2" # Display content in terminal
+}
+
+# Color settings
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[0;33m"
+BLUE="\033[0;34m"
+CYAN="\033[0;36m"
+WHITE="\033[1;37m"
+RESET="\033[0m"
+NC='\033[0m' # No color
+
+# Read configuration file and ignore comments
+CONF_FILE="/.kali-config/Ankali.yaml"
+
+if [ ! -f "$CONF_FILE" ]; then
+    echo "${RED}[-] Configuration file does not exist：$CONF_FILE ${NC}"
+    exit 1
+fi
+
+get_config_value() {
+    local key=$1
+    grep "^$key:" "$CONF_FILE" | cut -d ' ' -f 2-
+}
+
+INITIALIZATION=$(get_config_value "INITIALIZATION")
+LANGUAGE=$(get_config_value "LANGUAGE")
+NOOPENMENU=$(get_config_value "NOOPENMENU")
+NEOFETCH=$(get_config_value "NEOFETCH")
+OPTIMIZE=$(get_config_value "OPTIMIZE")
+DEPLOY=$(get_config_value "DEPLOY")
+TITLES=$(get_config_value "TITLES")
+SSH_INITIALIZATION=$(get_config_value "SSH_INITIALIZATION")
+SSH_NOOPENMENU=$(get_config_value "SSH_NOOPENMENU")
+SSH_PORT=$(get_config_value "SSH_PORT")
+SSH_IP=$(get_config_value "SSH_IP")
+SSH_LOG=$(get_config_value "SSH_LOG")
+SSH_BACK=$(get_config_value "SSH_BACK")
+SSH_SHELL=$(get_config_value "SSH_SHELL")
+SSH_CLI=$(get_config_value "SSH_CLI")
+
+# Check NEOFETCH configuration
+if [ "$NEOFETCH" == "true" ]; then
+    log "[*] NEOFETCH is true, running /.kali-config/neofetch" "${YELLOW}[*] NEOFETCH is true, running NEOFETCH...${NC}"
+    clear
+    /.kali-config/neofetch
+else
+    log "[+] NEOFETCH is false, continuing script" "${GREEN}[+] NEOFETCH is false, continuing script...${NC}"
+    clear
+fi
+
+
+# Check NOOPENMENU configuration
+if [ "$NOOPENMENU" == "true" ]; then
+    log "[*] NOOPENMENU is true, checking NEOFETCH"
+else
+    log "[+] NOOPENMENU is false, exiting after checking NEOFETCH" 
+    echo "Loading..."
+    zsh -l
+fi
+# Check OPTIMIZE configuration
+if [ "$OPTIMIZE" == "false" ]; then
+    if [ "$LANGUAGE" == "CN" ]; then
+        log "[*] LANGUAGE is set to CN, running /.kali-config/.profile" "${YELLOW}[*] LANGUAGE is set to CN, running .profile...${NC}"
+        source "/.kali-config/.profile"
+        sed -i 's/^OPTIMIZE: false/OPTIMIZE: true/' "$CONF_FILE"
+        sed -i 's/^DEPLOY: false/DEPLOY: true/' "$CONF_FILE"
+        log "[+] OPTIMIZE and DEPLOY set to true, entering Function Menu" 
+        goto_function_menu=true
+        apt install kali-linux-core python3-prettytable -y
+    else
+        log "[*] LANGUAGE is set to EN, entering System Configuration" 
+        fi
+else
+    log "[+] OPTIMIZE is already true, entering Function Menu"
+    goto_function_menu=true
+fi
+
+# If LANGUAGE is CN or OPTIMIZE is true, skip system configuration and enter Function Menu
+if [ "$goto_function_menu" == true ]; then
+    goto_function_menu=false  # Reset flag
+    # Function Menu code here...
+else
+    # System configuration
+    if [ "$DEPLOY" == "true" ]; then
+        log "[+] DEPLOY is true, entering Function Menu" "${GREEN}[+] DEPLOY is true, entering Function Menu...${NC}"
+        # Enter Function Menu
+    else
+        log "[!] DEPLOY is false, please answer the following questions" "${RED}[!] DEPLOY is false, please answer the following questions...${NC}"
+        echo -e "${BLUE}You can press Enter to use the default configuration.${NC}"
+
+        # Configure DNS server
+while true; do
+    read -p "[*] Please enter DNS server IP (default: 8.8.8.8): " dns_ip
+    if [[ -z "$dns_ip" ]]; then
+        dns_ip="8.8.8.8"
+    fi
+    if [[ $dns_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "nameserver $dns_ip" > /etc/resolv.conf
+        log "[+] DNS server configured as: $dns_ip" "${GREEN}[+] DNS server configured as: $dns_ip${NC}"
+        break
+    else
+        log "[!] Invalid IP address, please try again" "${RED}[!] Invalid IP address, please try again...${NC}"
+    fi
+done
+
+# Configure mirror source
+read -p "[*] Please enter mirror source URL (default: deb http://http.kali.org/kali kali-rolling main non-free contrib): " mirror
+if [[ -z "$mirror" ]]; then
+    mirror="deb http://http.kali.org/kali kali-rolling main non-free contrib"
+fi
+
+        echo "$mirror" > /etc/apt/sources.list
+        apt update && apt upgrade -y && apt install wget curl whiptail -y && apt install kali-linux-core -y && apt install python3-prettytable -y
+        log "[+] Mirror source configured as: $mirror" "${GREEN}[+] Mirror source configured as: $mirror${NC}"
+
+        # Update OPTIMIZE configuration to true
+        sed -i 's/^OPTIMIZE: false/OPTIMIZE: true/' "$CONF_FILE"
+        log "[+] OPTIMIZE set to true, entering Function Menu"
+    fi
+fi
+
+kali_language(){
+if ! grep -q "source /.kali-config/language.conf" $KALI_DIR/root/.zshrc; then
+    echo "source /.kali-config/language.conf" >> $KALI_DIR/root/.zshrc
+fi
+}
+
+browser_repair(){
+echo "Start repairing"
+cp /.kali-config/desktop/applications/chromium-no-sandbox.desktop ./
+
+if [ $? -eq 0 ]; then
+    echo "Copy succeeded."
+    chmod +x ./chromium-no-sandbox.desktop
+    update-desktop-database ./chromium-no-sandbox.desktop
+else
+    echo "Copy failed." >&2
+    exit 1
+fi
+
+sudo cp chromium-no-sandbox.desktop /usr/share/applications/
+
+if [ $? -eq 0 ]; then
+    echo "Copy succeeded."
+    chmod +x /usr/share/applications/chromium-no-sandbox.desktop
+else
+    echo "Copy failed." >&2
+    exit 1
+fi
+
+xdg-settings set default-web-browser chromium-no-sandbox.desktop
+
+if [ $? -eq 0 ]; then
+    echo "chromium-no-sandbox has been set as the default browser. "
+    Repair_completed="true"
+else
+    echo "Unable to set chromium-no-sandbox as the default browser." >&2
+    exit 1
+fi
+}
+
+ssh_Start_service(){
+# Read config variables
+if pgrep -lf dropbear > /dev/null; then
+    echo -e "Dropbear process detected, automatically killing and restarting Dropbear SSH"
+    pkill dropbear
+fi
+SSH_IP="${SSH_IP:-127.0.0.1}"       
+SSH_PORT="${SSH_PORT:-8022}"
+SSH_LOG="${SSH_LOG:-false}"      
+SSH_BACK="${SSH_BACK:-true}"     
+SSH_SHELL="${SSH_SHELL:-ankali}"     
+
+# echo $SSH_IP
+# echo $SSH_PORT
+# echo $SSH_LOG
+# echo $SSH_BACK
+# echo $SSH_SHELL
+
+DROPBEAR_CMD="dropbear -p $SSH_IP:$SSH_PORT"
+
+houtaiyunxingssh(){
+if pgrep -lf dropbear > /dev/null; then
+    echo -e "${YELLOW}Dropbear SSH is running in the background:${NC}"
+    pgrep -lf dropbear
+    echo -e "${YELLOW}You can use this command to connect to your SSH service\n${GREEN}ssh -p ${BLUE}$SSH_PORT root@${RED}$SSH_IP${NC}"
+    sleep 1
+else
+    echo -e "${RED} [-] Dropbear SSH failed to start. Please check if the configuration file /.kali-config/Ankali.yaml is correct or check the log file for today's date /.kali-config/log/$(date +'%Y-%m-%d').log${NC}"
+    sleep 0.5
+fi
+}
+
+if [ "$SSH_LOG" == "true" ]; then
+    DROPBEAR_CMD+=" -E"         
+fi
+
+if [ "$SSH_CLI" == "false" ]; then
+    DROPBEAR_CMD+=" -c $SSH_SHELL"         
+fi
+if [ "$SSH_BACK" == "false" ]; then
+    DROPBEAR_CMD+=" -F"          
+    echo -e "${YELLOW}Dropbear SSH will run in the foreground. Press CTRL+C to exit${NC}"
+    echo -e "${YELLOW}You can use this command to connect to your SSH service\n${GREEN}ssh -p ${BLUE}$SSH_PORT root@${RED}$SSH_IP${NC}"
+    $DROPBEAR_CMD
+else
+    $DROPBEAR_CMD
+    houtaiyunxingssh
+    sleep 1
+fi
+}
+
+SSH_NOOPENMENU_DEPLOY(){
+if [ "$SSH_NOOPENMENU" == "true" ]; then
+# Read configuration variables
+if pgrep -lf dropbear > /dev/null; then
+log "Dropbear process detected, skipping Dropbear ssh startup"
+else
+SSH_IP="${SSH_IP:-127.0.0.1}"       
+SSH_PORT="${SSH_PORT:-8022}"
+SSH_LOG="${SSH_LOG:-false}"      
+SSH_BACK="${SSH_BACK:-true}"     
+SSH_SHELL="${SSH_SHELL:-ankali}"     
+DROPBEAR_CMD="dropbear -p $SSH_IP:$SSH_PORT"
+houtaiyunxingssh(){
+     if pgrep -lf dropbear > /dev/null; then
+         echo -e "${YELLOW}Dropbear SSH is running in the background:${NC}"
+         pgrep -lf dropbear
+         echo -e "${YELLOW}You can use this command to connect to your ssh service\n${GREEN}ssh -p ${BLUE}$SSH_PORT root@${RED}$SSH_IP${NC}"
+         sleep 0.2
+     else
+         echo -e "${RED} [-]Dropbear ssh startup failed, please check if the configuration file /.kali-config/Ankali.yaml is set correctly or check the log file for today /.kali-config/log/$(date +'%Y-%m-%d').log${NC}"
+         sleep 0.2
+     fi
+}
+if [ "$SSH_LOG" == "true" ]; then
+     DROPBEAR_CMD+=" -E"         
+fi
+
+if [ "$SSH_CLI" == "false" ]; then
+     DROPBEAR_CMD+=" -c $SSH_SHELL"         
+fi
+$DROPBEAR_CMD
+houtaiyunxingssh
+fi
+fi
+}
+
+# Function Menu
+# Title
+kali_titles(){
+if [ "$TITLES" == "true" ]; then
+log "[+]TITLES is true to display titles."
+echo -e "${RED} __________________________________________"
+echo -e "|    ${GREEN}_            _  __    _    _     ___  ${RED}|"
+echo -e "|   ${GREEN}/ \   _ __   | |/ /   / \  | |   |_ _| ${RED}|"
+echo -e "|  ${GREEN}/ _ \ | '_ \  | ' /   / _ \ | |    | |  ${RED}|"
+echo -e "| ${GREEN}/ ___ \| | | | | . \  / ___ \| |___ | |  ${RED}|"
+echo -e "|${GREEN}/_/   \_\_| |_| |_|\_\/_/   \_\_____|___| ${RED}|"
+echo -e "|${CYAN}++++++++++++++++++${YELLOW}An kail${CYAN}+++++++++++++++++${RED}|"
+echo -e "|                                          |"
+echo -e "| ${WHITE}https://github.com/sansjtw1/Ankali-app   ${RED}|"
+echo -e "| ${WHITE}https://gitee.com/sansjtw/Ankali-app     ${RED}|"
+echo -e "|                                          |"
+echo -e " ------------------------------------------${RESET}"
+else
+log "[+]TITLES is false, and the title is not displayed."
+fi
+}
+# Self-starting ssh service
+SSH_NOOPENMENU_DEPLOY
+
+while true; do
+    kali_titles
+    echo -e "\n${BLUE}========= Function Menu =========${NC}"
+    echo -e "${GREEN}[1] Enter Kali CLI${NC}"
+    echo -e "${GREEN}[2] Set user account password${NC}"
+    echo -e "${GREEN}[3] Configure system language${NC}"
+    echo -e "${GREEN}[4] Graphical Desktop GUI and VNC Service${NC}"
+    echo -e "${GREEN}[5] Special Key${NC}"
+    echo -e "${GREEN}[6] Start Tmoe${NC}"
+    echo -e "${GREEN}[7] Start Katoolin${NC}"
+    echo -e "${GREEN}[8] Settings${NC}"
+    echo -e "${GREEN}[9] about${NC}"
+    
+    if [ -n "$XDG_CURRENT_DESKTOP" ]; then
+        echo -e "${GREEN}[10] Repair the kali-undercover script.${NC}"
+        if [ -e /bin/chromium ]; then
+            echo -e "${GREEN}[11] Repair the Chromium browser.${NC}"
+        fi
+    fi
+    echo
+    if [ "$SSH_INITIALIZATION" == "true" ]; then
+    echo -e "${GREEN}[98] Start SSH service${NC}"
+    fi
+    echo -e "${GREEN}[99] Install the basic default toolset${NC}"
+    echo -e "${BLUE}============================${NC}"
+    read -p "$(echo -e ${YELLOW}[*] Please enter the number of the function you want to use: ${NC})" choice
+
+    case "$choice" in
+        1)
+            log "[+] Entering Kali CLI"
+            kali_language
+            echo "Loading..."
+            zsh -l
+            break
+            ;;
+        2)
+            log "[+] Setting root account password"
+            passwd root
+            ;;
+        3)
+            log "[+] Configuring system language"
+            /.kali-config/linux/language
+            ;;
+        4)
+            log "[+] Configuring VNC Service"
+            /.kali-config/linux/VNC_server
+            ;;
+        5)
+            log "[+] Enter special key"
+            /.kali-config/linux/key
+            ;;
+        6)
+            if [ -n "$XDG_CURRENT_DESKTOP" ]; then
+                log "[+] Start tmoe"
+                pkg install -y curl ; curl -LO --compressed https://raw.githubusercontent.com/2moe/tmoe/2/2.awk && awk -f 2.awk
+            else
+                echo
+                log "[!] Invalid selection, please try again" "${YELLOW}[!] You can only use this function on the graphical GUI.${NC}"
+                echo "Press enter to continue..."
+                read
+            fi
+            ;;
+        7)
+            log "[+] start katoolin"
+            apt update
+            apt install -y git python2
+            git clone https://github.com/LionSec/katoolin.git
+            cd katoolin
+            python2 katoolin.py
+            ;;
+        8)
+            log "[+] Enter special key"
+            /.kali-config/linux/setup
+            ;;
+        9)
+            log "[+] Enter special about"
+            /.kali-config/linux/about
+            ;;
+        10)
+            if [ -n "$XDG_CURRENT_DESKTOP" ]; then
+                log "[+] Executing Fix undercover mode"
+                cp -fr "/.kali-config/kali-undercover" "/bin/kali-undercover"
+                echo "Repair completed, press Enter to continue....."
+                read
+            else
+                log "[!] Invalid selection, please try again"
+            fi
+            ;;
+        11)
+            if [ -e /bin/chromium ]; then
+                log "[+] Repair the chromium browser"
+                echo -e "${YELLOW}[!] This feature is used when Chromium cannot start or function properly. After repairing the Chromium browser, a file named chromium-no-sandbox.desktop will be created as the default browser, which launches the Chromium browser using the --no-sandbox parameter. You must be aware of the issues that arise from starting the Chromium browser with the sandbox disabled. The repair will not overwrite other files.${NC}"
+                echo "Press Enter to continue, Ctrl+C to exit...."
+                read
+                browser_repair
+                if [ -n "$Repair_completed" ]; then
+                echo "Press Enter to continue, Ctrl+C to exit...."
+                read
+                else
+                echo "Press Enter to continue...."
+                read
+                fi
+            else
+                log "[!] Invalid selection, please try again"
+            fi
+            ;;
+        98)
+            if [ "$SSH_INITIALIZATION" == "true" ]; then
+            ssh_Start_service
+            else
+            log "[!] Invalid selection, please try again"
+            fi
+            ;;
+        99)
+            log "[*] Do users install the most basic default toolset?" "${YELLOW}[!] The kali-linux-default package is about to be installed. This will install the most basic information security tools, representing the default software set of Kali Linux. However, please note that this will also occupy approximately 8GB of your phone's disk space.\nIf you want to install more toolsets, you can install them in 'Settings → Experience a complete basic set of Kali tools'${RESET}"
+            read -p "Do you want to continue with the installation (y/n): " answer
+            case $answer in
+            [Yy]* )
+                echo "Starting installation"
+                log "Start installation of kali-linux-default"
+                sudo apt install -y kali-linux-default
+                ;;
+            [Nn]* )
+                log "The user canceled the installation of kali-linux-default" "Installation canceled"
+                ;;
+            * )
+                log "The user made no valid choice." "Invalid input, please type y or n"
+                ;;
+            esac
+            ;;
+
+        *)
+            log "[!] Invalid selection, please try again"
+            ;;
+    esac
+done
+
+# © sansjtw Ankali
