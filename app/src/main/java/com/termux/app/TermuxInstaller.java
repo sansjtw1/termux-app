@@ -193,7 +193,7 @@ final class TermuxInstaller {
             
             return null;
         } catch (Exception e) {
-            return new Error("extractAsset", "Failed to extract asset: " + assetName, e.getMessage());
+            return new Error("Failed to extract asset: " + assetName);
         }
     }
     
@@ -233,15 +233,15 @@ final class TermuxInstaller {
             int exitCode = process.waitFor();
             
             // Clean up temp file
-            FileUtils.deleteFile(tempFile);
+            FileUtils.deleteFile("kali-temp", tempFile, true);
             
             if (exitCode != 0) {
-                return new Error("extractKaliRootfs", "tar extraction failed with exit code: " + exitCode, "");
+                return new Error("tar extraction failed with exit code: " + exitCode);
             }
             
             return null;
         } catch (Exception e) {
-            return new Error("extractKaliRootfs", "Failed to extract Kali rootfs", e.getMessage());
+            return new Error("Failed to extract Kali rootfs: " + e.getMessage());
         }
     }
     
@@ -297,7 +297,7 @@ final class TermuxInstaller {
             
             return null;
         } catch (Exception e) {
-            return new Error("createStartupScript", "Failed to create startup script", e.getMessage());
+            return new Error("Failed to create startup script: " + e.getMessage());
         }
     }
 
@@ -314,7 +314,7 @@ final class TermuxInstaller {
                     })
                     .setPositiveButton(R.string.bootstrap_error_try_again, (dialog, which) -> {
                         dialog.dismiss();
-                        FileUtils.deleteFile(TERMUX_PREFIX_DIR_PATH, true);
+                        FileUtils.deleteFile("prefix", TERMUX_PREFIX_DIR_PATH, true);
                         TermuxInstaller.setupBootstrapIfNeeded(activity, whenDone);
                     }).show();
             } catch (WindowManager.BadTokenException e1) {
