@@ -1,0 +1,456 @@
+#!/bin/bash
+# Copyright (c) 2024 Ankali SansJtw
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# Email: sansjtw@163.com, sansjtw1@gmail.com
+
+# 设置日志文件路径
+LOG_DIR="/.kali-config/log"
+LOG_FILE="$LOG_DIR/$(date +'%Y-%m-%d').log"
+
+# 创建日志目录
+mkdir -p "$LOG_DIR"
+
+# 定义日志记录函数
+log() {
+    echo -e "$1" >> "$LOG_FILE"
+    echo -e "$2" # 在终端上显示的内容
+}
+
+# 颜色设置
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[0;33m"
+BLUE="\033[0;34m"
+CYAN="\033[0;36m"
+WHITE="\033[1;37m"
+RESET="\033[0m"
+NC='\033[0m' # 无颜色
+
+# 读取YAML配置文件
+
+# 配置文件路径
+CONF_FILE="/.kali-config/Ankali.yaml"
+
+# 确保配置文件存在
+if [ ! -f "$CONF_FILE" ]; then
+    echo "${RED}[-] 配置文件不存在：$CONF_FILE ${NC}"
+    exit 1
+fi
+
+get_config_value() {
+    local key=$1
+    grep "^$key:" "$CONF_FILE" | cut -d ' ' -f 2-
+}
+
+# 读取配置项并保存到变量中
+INITIALIZATION=$(get_config_value "INITIALIZATION")
+LANGUAGE=$(get_config_value "LANGUAGE")
+NOOPENMENU=$(get_config_value "NOOPENMENU")
+NEOFETCH=$(get_config_value "NEOFETCH")
+OPTIMIZE=$(get_config_value "OPTIMIZE")
+DEPLOY=$(get_config_value "DEPLOY")
+TITLES=$(get_config_value "TITLES")
+LIUNXUSER=$(get_config_value "LIUNXUSER")
+SSH_INITIALIZATION=$(get_config_value "SSH_INITIALIZATION")
+SSH_NOOPENMENU=$(get_config_value "SSH_NOOPENMENU")
+SSH_PORT=$(get_config_value "SSH_PORT")
+SSH_IP=$(get_config_value "SSH_IP")
+SSH_LOG=$(get_config_value "SSH_LOG")
+SSH_BACK=$(get_config_value "SSH_BACK")
+SSH_SHELL=$(get_config_value "SSH_SHELL")
+SSH_CLI=$(get_config_value "SSH_CLI")
+
+# 检查 NEOFETCH 配置
+if [ "$NEOFETCH" == "true" ]; then
+    log "[*] NEOFETCH is true, running /.kali-config/neofetch" "${YELLOW}[*] 正在运行 NEOFETCH...${NC}"
+    clear
+    /.kali-config/neofetch
+else
+    log "[+] NEOFETCH is false, continuing script" "${GREEN}[+] NEOFETCH 为 false，继续执行脚本...${NC}"
+fi
+
+# 检查 NOOPENMENU 配置
+if [ "$NOOPENMENU" == "true" ]; then
+    log "[*] NOOPENMENU is true, checking NEOFETCH"
+else
+    log "[+] NOOPENMENU is false, exiting after checking NEOFETCH" 
+    echo "加载中..."
+    clear
+    zsh -l
+fi
+
+# 检查 OPTIMIZE 配置
+if [ "$OPTIMIZE" == "false" ]; then
+    if [ "$LANGUAGE" == "CN" ]; then
+        log "[*] LANGUAGE is set to CN, running /.kali-config/.profile" "${YELLOW}[*] 语言设置为 CN，正在运行 .profile...${NC}"
+        source "/.kali-config/.profile"
+        sed -i 's/^OPTIMIZE: false/OPTIMIZE: true/' "$CONF_FILE"
+        sed -i 's/^DEPLOY: false/DEPLOY: true/' "$CONF_FILE"
+        log "[+] OPTIMIZE and DEPLOY set to true, entering Function Menu"
+        goto_function_menu=true
+        apt install kali-linux-core python3-prettytable -y 
+    else
+        log "[*] LANGUAGE is set to EN, entering System Configuration" "${YELLOW}[*] 语言设置为 EN，进入系统配置...${NC}"
+    fi
+else
+    log "[+] OPTIMIZE is already true, entering Function Menu"
+    goto_function_menu=true
+fi
+
+# 如果 LANGUAGE 为 CN 或 OPTIMIZE 为 true，跳过系统配置，直接进入功能菜单
+if [ "$goto_function_menu" == true ]; then
+    goto_function_menu=false
+else
+    # 系统配置
+    if [ "$DEPLOY" == "true" ]; then
+        log "[+] DEPLOY is true, entering Function Menu" "${GREEN}[+] DEPLOY 为 true，进入功能菜单...${NC}"
+        # 进入功能菜单
+    else
+        log "[!] DEPLOY is false, please answer the following questions" "${RED}[!] DEPLOY 为 false，请回答以下问题...${NC}"
+        echo -e "${BLUE}您可以按回车键使用默认配置。${NC}"
+
+        # 配置 DNS 服务器
+        while true; do
+            read -p "$(echo -e ${YELLOW}[*] 请输入 DNS 服务器 IP（默认: 8.8.8.8）: ${NC})" dns_ip
+            if [[ -z "$dns_ip" ]]; then
+                dns_ip="8.8.8.8"
+            fi
+            if [[ $dns_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "nameserver $dns_ip" > /etc/resolv.conf
+                log "[+] DNS server configured as: $dns_ip" "${GREEN}[+] DNS 服务器已配置为: $dns_ip${NC}"
+                break
+            else
+                log "[!] Invalid IP address, please try again" "${RED}[!] 无效的 IP 地址，请重试...${NC}"
+            fi
+        done
+
+        # 配置镜像源
+        read -p "$(echo -e ${YELLOW}[*] 请输入镜像源地址（默认: deb http://http.kali.org/kali kali-rolling main non-free contrib）: ${NC})" mirror
+        if [[ -z "$mirror" ]]; then
+            mirror="deb http://http.kali.org/kali kali-rolling main non-free contrib"
+        fi
+        echo "$mirror" > /etc/apt/sources.list
+        apt update && apt upgrade -y && apt install wget curl whiptail -y && apt install kali-linux-core -y && apt install python3-prettytable -y
+        log "[+] Mirror source configured as: $mirror" "${GREEN}[+] 镜像源已配置为: $mirror${NC}"
+
+        # 更新 OPTIMIZE 配置为 true
+        sed -i 's/^OPTIMIZE: false/OPTIMIZE: true/' "$CONF_FILE"
+        log "[+] OPTIMIZE set to true, entering Function Menu"
+    fi
+fi
+
+kali_language(){
+if ! grep -q "source /.kali-config/language.conf" $KALI_DIR/root/.zshrc; then
+    echo "" >> $KALI_DIR/root/.zshrc
+    echo "source /.kali-config/language.conf" >> $KALI_DIR/root/.zshrc
+fi
+}
+
+browser_repair(){
+echo "开始修复"
+cp /.kali-config/desktop/applications/chromium-no-sandbox.desktop ./
+
+# 检查复制是否成功
+if [ $? -eq 0 ]; then
+    echo "Copy succeeded."
+    chmod +x ./chromium-no-sandbox.desktop
+    update-desktop-database ./chromium-no-sandbox.desktop
+else
+    echo "Copy failed." >&2
+    exit 1
+fi
+
+# 复制 chromium-no-sandbox.desktop 到 /usr/share/applications/
+sudo cp chromium-no-sandbox.desktop /usr/share/applications/
+
+# 检查复制是否成功
+if [ $? -eq 0 ]; then
+    echo "Copy succeeded."
+    chmod +x /usr/share/applications/chromium-no-sandbox.desktop
+else
+    echo "Copy failed." >&2
+    exit 1
+fi
+
+# 将 chromium-no-sandbox.desktop 设置为默认浏览器
+xdg-settings set default-web-browser chromium-no-sandbox.desktop
+
+# 检查是否设置成功
+if [ $? -eq 0 ]; then
+    echo "chromium-no-sandbox 已设置为默认浏览器。"
+    Repair_completed="true"
+else
+    echo "无法将 chromium-no-sandbox 设置为默认浏览器。" >&2
+    exit 1
+fi
+}
+
+ssh_Start_service(){
+# 读取配置变量
+if pgrep -lf dropbear > /dev/null; then
+echo -e "检测到 Dropbear 的进程，将自动杀死并重启 Dropbear ssh"
+pkill dropbear
+fi
+SSH_IP="${SSH_IP:-127.0.0.1}"       
+SSH_PORT="${SSH_PORT:-8022}"
+SSH_LOG="${SSH_LOG:-false}"      
+SSH_BACK="${SSH_BACK:-true}"     
+SSH_SHELL="${SSH_SHELL:-ankali}"     
+
+# echo $SSH_IP
+# echo $SSH_PORT
+# echo $SSH_LOG
+# echo $SSH_BACK
+# echo $SSH_SHELL
+
+DROPBEAR_CMD="dropbear -p $SSH_IP:$SSH_PORT"
+
+houtaiyunxingssh(){
+if pgrep -lf dropbear > /dev/null; then
+    echo -e "${YELLOW}Dropbear SSH 正在后台运行:${NC}"
+    pgrep -lf dropbear
+    echo -e "${YELLOW}你可以使用此命令来连接你的ssh服务\n${GREEN}ssh -p ${BLUE}$SSH_PORT root@${RED}$SSH_IP${NC}"
+    sleep 1
+else
+    echo -e "${RED} [-]Dropbear ssh 启动失败，请检查配置文件 /.kali-config/Ankali.yaml 是否配置正确或者检查当日的日志文件 /.kali-config/log/$(date +'%Y-%m-%d').log${NC}"
+    sleep 0.5
+fi
+}
+
+if [ "$SSH_LOG" == "true" ]; then
+    DROPBEAR_CMD+=" -E"         
+fi
+
+if [ "$SSH_CLI" == "false" ]; then
+    DROPBEAR_CMD+=" -c $SSH_SHELL"         
+fi
+if [ "$SSH_BACK" == "false" ]; then
+    DROPBEAR_CMD+=" -F"          
+    echo -e "${YELLOW}Dropbear SSH 将在前台运行，CTRL+C 退出${NC}"
+    echo -e "${YELLOW}你可以使用此命令来连接你的ssh服务\n${GREEN}ssh -p ${BLUE}$SSH_PORT root@${RED}$SSH_IP${NC}"
+    $DROPBEAR_CMD
+else
+$DROPBEAR_CMD
+houtaiyunxingssh
+sleep 1
+fi
+}
+
+SSH_NOOPENMENU_DEPLOY(){
+if [ "$SSH_NOOPENMENU" == "true" ]; then
+# 读取配置变量
+if pgrep -lf dropbear > /dev/null; then
+log "已检测到 Dropbear 的进程，将跳过启动 Dropbear ssh"
+else
+SSH_IP="${SSH_IP:-127.0.0.1}"       
+SSH_PORT="${SSH_PORT:-8022}"
+SSH_LOG="${SSH_LOG:-false}"      
+SSH_BACK="${SSH_BACK:-true}"     
+SSH_SHELL="${SSH_SHELL:-ankali}"     
+DROPBEAR_CMD="dropbear -p $SSH_IP:$SSH_PORT"
+houtaiyunxingssh(){
+    if pgrep -lf dropbear > /dev/null; then
+        echo -e "${YELLOW}Dropbear SSH 正在后台运行:${NC}"
+        pgrep -lf dropbear
+        echo -e "${YELLOW}你可以使用此命令来连接你的ssh服务\n${GREEN}ssh -p ${BLUE}$SSH_PORT root@${RED}$SSH_IP${NC}"
+        sleep 0.2
+else
+        echo -e "${RED} [-]Dropbear ssh 启动失败，请检查配置文件 /.kali-config/Ankali.yaml 是否配置正确或者检查当日的日志文件 /.kali-config/log/$(date +'%Y-%m-%d').log${NC}"
+        sleep 0.2
+    fi
+}
+if [ "$SSH_LOG" == "true" ]; then
+    DROPBEAR_CMD+=" -E"         
+fi
+
+if [ "$SSH_CLI" == "false" ]; then
+    DROPBEAR_CMD+=" -c $SSH_SHELL"         
+fi
+$DROPBEAR_CMD
+houtaiyunxingssh
+fi
+fi
+}
+
+kali_titles(){
+if [ "$TITLES" == "true" ]; then
+log "[+]TITLES is true to display titles."
+echo -e "${RED} __________________________________________"
+echo -e "|    ${GREEN}_            _  __    _    _     ___  ${RED}|"
+echo -e "|   ${GREEN}/ \   _ __   | |/ /   / \  | |   |_ _| ${RED}|"
+echo -e "|  ${GREEN}/ _ \ | '_ \  | ' /   / _ \ | |    | |  ${RED}|"
+echo -e "| ${GREEN}/ ___ \| | | | | . \  / ___ \| |___ | |  ${RED}|"
+echo -e "|${GREEN}/_/   \_\_| |_| |_|\_\/_/   \_\_____|___| ${RED}|"
+echo -e "|${CYAN}++++++++++++++++++${YELLOW}An kail${CYAN}+++++++++++++++++${RED}|"
+echo -e "|                                          |"
+echo -e "| ${WHITE}https://github.com/sansjtw1/Ankali-app   ${RED}|"
+echo -e "| ${WHITE}https://gitee.com/sansjtw/Ankali-app     ${RED}|"
+echo -e "|                                          |"
+echo -e " ------------------------------------------${RESET}"
+else
+log "[+]TITLES is false, and the title is not displayed."
+fi
+}
+# 自启动ssh
+SSH_NOOPENMENU_DEPLOY
+# 功能菜单
+while true; do
+    kali_titles
+    echo -e "\n${BLUE}========= 功能菜单 =========${NC}"
+    echo -e "${GREEN}[1] 进入 Kali CLI${NC}"
+    echo -e "${GREEN}[2] 设置当前用户密码${NC}"
+    echo -e "${GREEN}[3] 配置系统语言${NC}"
+    echo -e "${GREEN}[4] 图形桌面 GUI 与 VNC 服务${NC}"
+    echo -e "${GREEN}[5] 特殊键${NC}"
+    echo -e "${GREEN}[6] 启动tmoe工具${NC}"
+    echo -e "${GREEN}[7] 启动katoolin工具${NC}"
+    echo -e "${GREEN}[8] 设置${NC}"
+    echo -e "${GREEN}[9] 关于 AnKali${NC}"
+
+    # 检查 XDG_CURRENT_DESKTOP 是否有值
+    if [ -n "$XDG_CURRENT_DESKTOP" ]; then
+        echo -e "${GREEN}[10] 修复卧底模式${NC}"
+        if [ -e /bin/chromium ]; then
+            echo -e "${GREEN}[11] 修复chromium浏览器${NC}"
+        fi
+    fi
+    echo
+    if [ "$SSH_INITIALIZATION" == "true" ]; then
+    echo -e "${GREEN}[98] 启动ssh服务${NC}"
+    fi
+    echo -e "${GREEN}[99] 安装最基本默认的工具集${NC}"
+    echo -e "${BLUE}============================${NC}"
+    read -p "$(echo -e ${YELLOW}[*] 请输入对应功能的数字编号: ${NC})" choice
+
+    case "$choice" in
+        1)
+            log "[+] Entering Kali CLI"
+            kali_language
+            echo "加载中..."
+            su - $LIUNXUSER -c 'zsh --login'
+            break
+            ;;
+        2)
+            log "[+] Setting uesr account password"
+            sudo passwd $LIUNXUSER
+            ;;
+        3)
+            log "[+] Configuring system language"
+            /.kali-config/linux/language
+            ;;
+        4)
+            log "[+] Configuring VNC Service"
+            /.kali-config/linux/VNC_server
+            ;;
+        5)
+            log "[+] Enter settings"
+            /.kali-config/linux/key
+            ;;
+        6)
+            if [ -n "$XDG_CURRENT_DESKTOP" ]; then
+                log "[+] Start tmoe"
+                pkg install -y curl ; bash -c "$(curl -L gitee.com/mo2/linux/raw/2/2)"
+            else
+                echo
+                log "[!] Invalid selection, please try again" "${YELLOW}[!] 你只能在图形桌面上使用该功能${NC}"
+                echo "按回车键继续....."
+                read
+            fi
+            ;;
+        7)
+            log "[+] start katoolin"
+            apt update
+            apt install -y git python2
+            git clone https://github.com/LionSec/katoolin.git
+            cd katoolin
+            python2 katoolin.py
+            ;;
+        8)
+            log "[+] Enter special key"
+            /.kali-config/linux/setup
+            exit 0
+            ;;
+        9)
+            log "[+] Enter special about"
+            /.kali-config/linux/about
+            ;;
+        10)
+            if [ -n "$XDG_CURRENT_DESKTOP" ]; then
+                log "[+] Executing Fix undercover mode"
+                cp -fr "/.kali-config/kali-undercover" "/bin/kali-undercover"
+                echo "已修复完成，按回车键继续...."
+                read
+            else
+                log "[!] Invalid selection, please try again"
+            fi
+            ;;
+        11)
+            if [ -e /bin/chromium ]; then
+                log "[+] Repair the chromium browser"
+                echo -e "${YELLOW}[!] 该功能是用于chromium无法正常启动或使用。当使用修复chromium浏览器后将会创建一个chromium-no-sandbox.desktop文件作为默认浏览器，该浏览器是使用chromium浏览器的--no-sandbox参数所启动的。你必须清楚关闭sandbox沙盒模式启动chromium浏览器会有什么问题。修复后不会覆盖其他文件${NC}"
+                echo "按回车键继续，Ctrl+C退出...."
+                read
+                browser_repair
+                if [ -n "$Repair_completed" ]; then
+                echo "按回车键继续...."
+                read
+                else
+                echo "chromium修复完成"
+                echo "按回车键继续...."
+                read
+                fi
+            else
+                log "[!] Invalid selection, please try again"
+            fi
+            ;;
+        98)
+            if [ "$SSH_INITIALIZATION" == "true" ]; then
+            ssh_Start_service
+            else
+            log "[!] Invalid selection, please try again"
+            fi
+            
+            ;;
+        99)
+                log "[*] Do users install the most basic default toolset?" "${YELLOW}[!]即将安装kali-linux-default软件包，这将安装最基本的信息安全工具，它也代表了Kali Linux 默认安装的软件集合。但是要注意的是这也将会占用大约8GB的手机磁盘空间。\n如果想安装更多工具集，可以在 '设置 → 体验基本完整的kali工具集' 上安装${RESET}"
+                read -p "是否继续安装(y/n): " answer
+                case $answer in
+                    [Yy]* )
+                        echo "即将安装"
+                        log "Start installation kali-linux-default"
+                        sudo apt install -y kali-linux-default
+                        ;;
+                    [Nn]* )
+                        log "The user canceled the installation kali-linux-default" "不安装了"
+                        ;;
+                    * )
+                        log "The user has no choice." "无效输入，请键入y或n"
+                        ;;
+                esac
+                ;;
+        *)
+            log "[!] Invalid selection, please try again"
+            ;;
+    esac
+done
+
+
+# Sansjtw Ankali

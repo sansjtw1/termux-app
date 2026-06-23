@@ -277,6 +277,69 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         // Send the {@link TermuxConstants#BROADCAST_TERMUX_OPENED} broadcast to notify apps that Termux
         // app has been opened.
         TermuxUtils.sendTermuxOpenedBroadcast(this);
+
+        // Auto-start Kali environment
+        startKaliEnvironment();
+    }
+
+    /**
+     * Start Kali Linux environment automatically
+     */
+    private void startKaliEnvironment() {
+        KaliManager kaliManager = new KaliManager(this);
+        
+        if (!kaliManager.isKaliInstalled()) {
+            Logger.logInfo(LOG_TAG, "Kali not installed, starting extraction...");
+            Logger.showToast(this, "正在初始化 Kali 环境，请稍候...", true);
+            
+            new Thread(() -> {
+                if (kaliManager.extractKaliRootfs()) {
+                    Logger.logInfo(LOG_TAG, "Kali rootfs extracted successfully");
+                    runOnUiThread(() -> {
+                        Logger.showToast(this, "Kali 环境初始化完成", true);
+                        startKaliSession(kaliManager);
+                    });
+                } else {
+                    Logger.logError(LOG_TAG, "Failed to extract Kali rootfs");
+                    runOnUiThread(() -> {
+                        Logger.showToast(this, "Kali 环境初始化失败", true);
+                    });
+                }
+            }).start();
+        } else {
+            Logger.logInfo(LOG_TAG, "Kali already installed, starting session...");
+            startKaliSession(kaliManager);
+        }
+    }
+
+    /**
+     * Start a terminal session with Kali Linux environment
+     */
+    private void startKaliSession(KaliManager kaliManager) {
+        if (mTermuxService != null) {
+            String[] kaliCommand = kaliManager.getKaliStartCommand();
+            if (kaliCommand != null && kaliCommand.length > 0) {
+                Logger.logInfo(LOG_TAG, "Starting Kali session with command: " + String.join(" ", kaliCommand));
+                
+                // Use the simpler createTermuxSession API
+                mTermuxService.createTermuxSession(
+                    kaliCommand[0],
+                    java.util.Arrays.copyOfRange(kaliCommand, 1, kaliCommand.length),
+                    null,
+                    "/data/data/com.kalinrx/files/kali-arm64",
+                    false,
+                    "kali-linux"
+                );
+                
+                Logger.logInfo(LOG_TAG, "Kali session started successfully");
+            } else {
+                Logger.logError(LOG_TAG, "Invalid Kali start command");
+                Logger.showToast(this, "Kali 启动命令无效", true);
+            }
+        } else {
+            Logger.logError(LOG_TAG, "TermuxService not available, cannot start Kali session");
+            Logger.showToast(this, "无法启动 Kali 会话", true);
+        }
     }
 
     @Override
