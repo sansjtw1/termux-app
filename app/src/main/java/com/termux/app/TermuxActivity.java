@@ -288,11 +288,14 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     private void startKaliEnvironment() {
         KaliManager kaliManager = new KaliManager(this);
         
-        if (!kaliManager.isKaliInstalled()) {
-            Logger.logInfo(LOG_TAG, "Kali not installed, starting extraction...");
-            Logger.showToast(this, "正在初始化 Kali 环境，请稍候...", true);
+        // Initialize environment (copy proot/loader binaries)
+        new Thread(() -> {
+            kaliManager.initializeEnvironment();
             
-            new Thread(() -> {
+            if (!kaliManager.isKaliInstalled()) {
+                Logger.logInfo(LOG_TAG, "Kali not installed, starting extraction...");
+                runOnUiThread(() -> Logger.showToast(this, "正在初始化 Kali 环境，请稍候...", true));
+                
                 if (kaliManager.extractKaliRootfs()) {
                     Logger.logInfo(LOG_TAG, "Kali rootfs extracted successfully");
                     runOnUiThread(() -> {
@@ -301,15 +304,13 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                     });
                 } else {
                     Logger.logError(LOG_TAG, "Failed to extract Kali rootfs");
-                    runOnUiThread(() -> {
-                        Logger.showToast(this, "Kali 环境初始化失败", true);
-                    });
+                    runOnUiThread(() -> Logger.showToast(this, "Kali 环境初始化失败", true));
                 }
-            }).start();
-        } else {
-            Logger.logInfo(LOG_TAG, "Kali already installed, starting session...");
-            startKaliSession(kaliManager);
-        }
+            } else {
+                Logger.logInfo(LOG_TAG, "Kali already installed, starting session...");
+                runOnUiThread(() -> startKaliSession(kaliManager));
+            }
+        }).start();
     }
 
     /**

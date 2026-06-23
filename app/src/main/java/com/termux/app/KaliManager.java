@@ -42,6 +42,36 @@ public class KaliManager {
     }
     
     /**
+     * 初始化 Kali 环境，包括提取 proot 二进制文件
+     */
+    public boolean initializeEnvironment() {
+        try {
+            // 复制 proot 到 usr/bin/proot
+            File prootDest = new File(filesDir, "usr/bin/proot");
+            if (!prootDest.exists()) {
+                prootDest.getParentFile().mkdirs();
+                copyAssetToFile("proot/proot", prootDest);
+                prootDest.setExecutable(true, false);
+                Log.i(TAG, "Copied proot to " + prootDest.getAbsolutePath());
+            }
+            
+            // 复制 loader 到 usr/libexec/proot/loader
+            File loaderDest = new File(filesDir, "usr/libexec/proot/loader");
+            if (!loaderDest.exists()) {
+                loaderDest.getParentFile().mkdirs();
+                copyAssetToFile("proot/loader", loaderDest);
+                loaderDest.setExecutable(true, false);
+                Log.i(TAG, "Copied loader to " + loaderDest.getAbsolutePath());
+            }
+            
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to initialize environment", e);
+            return false;
+        }
+    }
+    
+    /**
      * 解压 Kali rootfs
      * 注意：这个方法需要在后台线程执行
      */
@@ -163,8 +193,7 @@ public class KaliManager {
      */
     public String[] getKaliStartCommand() {
         File kaliDir = getKaliInstallDir();
-        File prootBin = new File(filesDir, "proot/proot");
-        File loaderBin = new File(filesDir, "proot/loader");
+        File prootBin = new File(filesDir, "usr/bin/proot");
         
         // 构建 PRoot 命令
         return new String[]{
