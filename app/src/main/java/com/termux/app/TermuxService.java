@@ -18,6 +18,8 @@ import android.os.PowerManager;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import java.io.File;
+
 import com.termux.R;
 import com.termux.app.event.SystemEventReceiver;
 import com.termux.app.terminal.TermuxTerminalSessionActivityClient;
@@ -120,6 +122,36 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         runStartForeground();
 
         SystemEventReceiver.registerPackageUpdateEvents(this);
+
+        // Auto-start Kali environment
+        startKaliEnvironment();
+    }
+
+    /**
+     * Start Kali Linux environment automatically
+     */
+    private void startKaliEnvironment() {
+        new Handler().postDelayed(() -> {
+            try {
+                // Check if Kali startup script exists
+                File kaliScriptFile = new File("/data/data/com.kalinrx/files/home/start-kali.sh");
+                if (kaliScriptFile.exists()) {
+                    Logger.logInfo(LOG_TAG, "Starting Kali environment...");
+                    // Execute Kali startup script
+                    ExecutionCommand executionCommand = new ExecutionCommand();
+                    executionCommand.executable = "/data/data/com.kalinrx/files/home/start-kali.sh";
+                    executionCommand.arguments = new String[]{};
+                    executionCommand.workingDirectory = "/data/data/com.kalinrx/files/home";
+                    executionCommand.isFailsafe = true;
+                    executionCommand.runner = Runner.TERMINAL_SESSION;
+                    mShellManager.createTermuxSession(this, executionCommand);
+                } else {
+                    Logger.logInfo(LOG_TAG, "Kali startup script not found, skipping auto-start");
+                }
+            } catch (Exception e) {
+                Logger.logError(LOG_TAG, "Failed to start Kali environment: " + e.getMessage());
+            }
+        }, 2000); // Delay 2 seconds to ensure service is fully initialized
     }
 
     @SuppressLint("Wakelock")
