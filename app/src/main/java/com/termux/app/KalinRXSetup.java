@@ -30,6 +30,9 @@ public class KalinRXSetup {
     private static final String PROOT_BIN = FILES_DIR + "/bin/proot";
     private static final String LOADER_BIN = FILES_DIR + "/bin/loader";
 
+    /** Set by file picker before Kali setup to use a local file instead of downloading. */
+    private static volatile File sLocalTarFile = null;
+
     public interface ProgressCallback {
         void onProgress(String message);
     }
@@ -40,6 +43,34 @@ public class KalinRXSetup {
 
     public static boolean isTarDownloaded() {
         return new File(TAR_XZ_FILE).exists();
+    }
+
+    /** Set a local tar.xz file to use instead of downloading. */
+    public static void setLocalTarFile(File file) {
+        sLocalTarFile = file;
+    }
+
+    public static File getLocalTarFile() {
+        return sLocalTarFile;
+    }
+
+    /** Check common paths for a local kali image. */
+    public static File findLocalTarFile() {
+        String[] commonPaths = {
+            "/sdcard/Download/kali-arm64.tar.xz",
+            "/sdcard/Downloads/kali-arm64.tar.xz",
+            "/sdcard/kali-arm64.tar.xz",
+            "/storage/emulated/0/Download/kali-arm64.tar.xz",
+            "/storage/emulated/0/Downloads/kali-arm64.tar.xz",
+            "/storage/emulated/0/kali-arm64.tar.xz",
+        };
+        for (String path : commonPaths) {
+            File f = new File(path);
+            if (f.exists() && f.isFile() && f.length() > 1024 * 1024) {
+                return f;
+            }
+        }
+        return null;
     }
 
     /**
@@ -60,15 +91,23 @@ public class KalinRXSetup {
         Logger.logInfo(LOG_TAG, "Extracting Kali config files...");
         extractKaliConfigAssets(activity);
 
-        // Step 3: Download Kali rootfs if needed
+        // Step 3: Download or use local Kali rootfs
         File tarFile = new File(TAR_XZ_FILE);
         File kaliDir = new File(KALI_DIR);
 
         if (!kaliDir.exists() || !new File(KALI_DIR + "/.kali-config/kali-run").exists()) {
             if (!tarFile.exists()) {
-                updateProgress(progressCallback, activity, "Downloading Kali Linux rootfs...");
-                Logger.logInfo(LOG_TAG, "Downloading Kali rootfs from: " + KALI_ROOTFS_URL);
-                downloadKaliRootfs(tarFile, progressCallback, activity);
+                // Check if a local file was manually selected
+                if (sLocalTarFile != null && sLocalTarFile.exists()) {
+                    updateProgress(progressCallback, activity, "Copying local Kali image...");
+                    Logger.logInfo(LOG_TAG, "Using local Kali image: " + sLocalTarFile.getAbsolutePath());
+                    copyFile(sLocalTarFile, tarFile);
+                    sLocalTarFile = null; // Clear after use
+                } else {
+                    updateProgress(progressCallback, activity, "Downloading Kali Linux rootfs...");
+                    Logger.logInfo(LOG_TAG, "Downloading Kali rootfs from: " + KALI_ROOTFS_URL);
+                    downloadKaliRootfs(tarFile, progressCallback, activity);
+                }
             }
 
             if (tarFile.exists() && tarFile.length() > 0) {

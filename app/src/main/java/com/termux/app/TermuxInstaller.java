@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.system.Os;
@@ -28,6 +31,7 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.RandomAccessFile;
 import java.util.ArrayList;
@@ -51,6 +55,12 @@ final class TermuxInstaller {
 
     private static final String BOOTSTRAP_PATCHED_MARKER =
         TERMUX_PREFIX_DIR_PATH + "/.kalinrx_bootstrap_patched";
+
+    /** Request code for Kali local file picker. */
+    public static final int REQUEST_CODE_KALI_LOCAL_FILE = 10001;
+
+    /** Pending callback for when file picker returns. */
+    private static Runnable sPendingKaliWhenDone = null;
 
     /** Performs bootstrap setup if necessary. */
     static void setupBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
@@ -274,6 +284,67 @@ final class TermuxInstaller {
     }
 
     private static void startKaliSetup(final Activity activity, final Runnable whenDone) {
+        // Check if there's a local file available
+        final File foundLocalFile = KalinRXSetup.findLocalTarFile();
+
+        // Build dialog options
+        AlertDialog.Builder builder = new AlertDialog.Builder(activity);
+        builder.setTitle("Kali Linux Setup");
+        StringBuilder msg = new StringBuilder("Kali Linux rootfs is not installed.\n\n");
+        if (foundLocalFile != null) {
+            msg.append("Local image found:\n").append(foundLocalFile.getAbsolutePath())
+                .append("\n(").append(foundLocalFile.length() / 1024 / 1024).append(" MB)\n\n");
+        }
+        msg.append("Choose installation method:");
+        builder.setMessage(msg.toString());
+
+        builder.setPositiveButton("Download", (dialog, which) -> {
+            dialog.dismiss();
+            KalinRXSetup.setLocalTarFile(null);
+            doKaliSetupProgress(activity, whenDone);
+        });
+
+        builder.setNeutralButton("Select Local File", (dialog, which) -> {
+            dialog.dismiss();
+            sPendingKaliWhenDone = whenDone;
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            String[] mimeTypes = {"application/x-xz", "application/octet-stream", "application/x-tar"};
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+            try {
+                activity.startActivityForResult(intent, REQUEST_CODE_KALI_LOCAL_FILE);
+            } catch (Exception e) {
+                // Fallback: no filter
+                Intent fallback = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                fallback.setType("*/*");
+                activity.startActivityForResult(fallback, REQUEST_CODE_KALI_LOCAL_FILE);
+            }
+        });
+
+        if (foundLocalFile != null) {
+            builder.setNegativeButton("Use Found Local File", (dialog, which) -> {
+                dialog.dismiss();
+                KalinRXSetup.setLocalTarFile(foundLocalFile);
+                doKaliSetupProgress(activity, whenDone);
+            });
+        } else {
+            builder.setNegativeButton("Skip", (dialog, which) -> {
+                dialog.dismiss();
+                whenDone.run();
+            });
+        }
+
+        builder.setCancelable(false);
+        try {
+            builder.show();
+        } catch (WindowManager.BadTokenException e) {
+            whenDone.run();
+        }
+    }
+
+    private static void doKaliSetupProgress(final Activity activity, final Runnable whenDone) {
         final ProgressDialog kaliProgress = ProgressDialog.show(activity, null,
             "Setting up KalinRX Kali Linux environment...", true, false);
         new Thread(() -> {
@@ -303,6 +374,42 @@ final class TermuxInstaller {
                 });
             }
         }).start();
+    }
+
+    /** Handle the result from the Kali local file picker. */
+    public static void handleKaliFilePickerResult(Activity activity, Uri uri, Runnable whenDone) {
+        if (uri == null) {
+            whenDone.run();
+            return;
+        }
+        try {
+            // Copy the file from URI to local temp
+            File tempFile = new File(TermuxConstants.TERMUX_FILES_DIR_PATH + "/tmp/kali-local.tar.xz");
+            tempFile.getParentFile().mkdirs();
+            try (InputStream in = activity.getContentResolver().openInputStream(uri);
+                 FileOutputStream out = new FileOutputStream(tempFile)) {
+                byte[] buf = new byte[8192];
+                int read;
+                while ((read = in.read(buf)) != -1) {
+                    out.write(buf, 0, read);
+                }
+            }
+            KalinRXSetup.setLocalTarFile(tempFile);
+            doKaliSetupProgress(activity, whenDone);
+        } catch (Exception e) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to read selected file", e);
+            activity.runOnUiThread(() -> {
+                try {
+                    new AlertDialog.Builder(activity)
+                        .setTitle("Error")
+                        .setMessage("Failed to read selected file: " + e.getMessage())
+                        .setPositiveButton("OK", (d, w) -> whenDone.run())
+                        .show();
+                } catch (Exception ignored) {
+                    whenDone.run();
+                }
+            });
+        }
     }
 
     /**
@@ -505,25 +612,52 @@ final class TermuxInstaller {
             File dir = new File(dirPath);
             if (!dir.isDirectory()) return;
 
-            Set<String> modifiedFiles = new HashSet<>();
-            patchDirectory(dir, oldBytes, newBytes, modifiedFiles);
+            patchDirectory(dir, oldBytes, newBytes);
 
-            // Restore execute permissions on all files that were modified
-            int restoredCount = 0;
-            for (String path : modifiedFiles) {
-                if (executableFiles.contains(path) || isInExecutableDir(path, dirPath)) {
-                    try {
-                        Os.chmod(path, 0700);
-                        restoredCount++;
-                    } catch (Exception e) {
-                        Logger.logError(LOG_TAG, "Failed to restore permission: " + path);
-                    }
-                }
-            }
-            Logger.logInfo(LOG_TAG, "Bootstrap patching complete. Restored permissions on " + restoredCount + " files.");
+            // After patching, do a FULL recursive chmod on ALL executable directories.
+            // This is the most reliable approach - RandomAccessFile may strip
+            // execute permissions on some Android versions.
+            forceChmodAllExecutables(dirPath);
+
+            Logger.logInfo(LOG_TAG, "Bootstrap patching complete.");
         } catch (Exception e) {
             Logger.logStackTraceWithMessage(LOG_TAG, "Failed to patch bootstrap files", e);
         }
+    }
+
+    private static void forceChmodAllExecutables(String prefixPath) {
+        try {
+            String[] execDirs = {"bin", "libexec", "sbin", "lib/apt"};
+            int count = 0;
+            for (String relDir : execDirs) {
+                File dir = new File(prefixPath, relDir);
+                if (dir.isDirectory()) {
+                    count += chmodRecursive(dir, 0700);
+                }
+            }
+            Logger.logInfo(LOG_TAG, "Force chmod complete: " + count + " files permission restored.");
+        } catch (Exception e) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to force chmod", e);
+        }
+    }
+
+    private static int chmodRecursive(File dir, int mode) {
+        int count = 0;
+        File[] files = dir.listFiles();
+        if (files == null) return 0;
+        for (File file : files) {
+            if (file.isDirectory()) {
+                count += chmodRecursive(file, mode);
+            } else if (file.isFile()) {
+                try {
+                    Os.chmod(file.getAbsolutePath(), mode);
+                    count++;
+                } catch (Exception e) {
+                    Logger.logError(LOG_TAG, "chmod failed: " + file.getAbsolutePath() + ": " + e.getMessage());
+                }
+            }
+        }
+        return count;
     }
 
     private static boolean isInExecutableDir(String filePath, String prefixPath) {
@@ -535,19 +669,16 @@ final class TermuxInstaller {
                rel.contains("/apt/methods");
     }
 
-    private static void patchDirectory(File dir, byte[] oldBytes, byte[] newBytes, Set<String> modifiedFiles) {
+    private static void patchDirectory(File dir, byte[] oldBytes, byte[] newBytes) {
         File[] files = dir.listFiles();
         if (files == null) return;
 
         for (File file : files) {
             if (file.isDirectory()) {
-                patchDirectory(file, oldBytes, newBytes, modifiedFiles);
+                patchDirectory(file, oldBytes, newBytes);
             } else if (file.isFile() && !isBinaryBlacklisted(file.getName())) {
                 try {
-                    boolean modified = patchFile(file, oldBytes, newBytes);
-                    if (modified) {
-                        modifiedFiles.add(file.getAbsolutePath());
-                    }
+                    patchFile(file, oldBytes, newBytes);
                 } catch (Exception e) {
                     // Skip files that can't be patched
                 }

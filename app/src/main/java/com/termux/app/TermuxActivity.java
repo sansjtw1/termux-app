@@ -795,6 +795,20 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         Logger.logVerbose(LOG_TAG, "onActivityResult: requestCode: " + requestCode + ", resultCode: "  + resultCode + ", data: "  + IntentUtils.getIntentString(data));
         if (requestCode == PermissionUtils.REQUEST_GRANT_STORAGE_PERMISSION) {
             requestStoragePermission(true);
+        } else if (requestCode == TermuxInstaller.REQUEST_CODE_KALI_LOCAL_FILE) {
+            Runnable whenDone = () -> {
+                if (mTermuxService == null) return;
+                try {
+                    mTermuxTerminalSessionActivityClient.addNewSession(false, null);
+                } catch (WindowManager.BadTokenException e) {
+                    // Activity finished - ignore.
+                }
+            };
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                TermuxInstaller.handleKaliFilePickerResult(this, data.getData(), whenDone);
+            } else {
+                whenDone.run();
+            }
         }
     }
 

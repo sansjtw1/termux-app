@@ -347,7 +347,7 @@ public final class TermuxConstants {
      */
 
     /** Termux app name */
-    public static final String TERMUX_APP_NAME = "KalinRX"; // Default: "Termux"
+    public static final String TERMUX_APP_NAME = "Ankali"; // Default: "Termux"
     /** Termux package name */
     public static final String TERMUX_PACKAGE_NAME = "com.kalinrx"; // Default: "com.termux"
     /** Termux GitHub repo name */
