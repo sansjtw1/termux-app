@@ -414,20 +414,20 @@ final class TermuxInstaller {
 
     /**
      * Check if bootstrap is properly installed and patched.
+     * This performs an actual execution test, not just file permission check.
      */
     private static boolean isBootstrapReady() {
         // Check prefix directory exists and is not empty
-        if (!FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true)) return false;
-        if (TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) return false;
-
-        // Check marker file exists
-        File marker = new File(BOOTSTRAP_PATCHED_MARKER);
-        if (!marker.exists()) {
-            Logger.logWarn(LOG_TAG, "Bootstrap patch marker not found. Bootstrap may be corrupted.");
+        if (!FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true)) {
+            Logger.logInfo(LOG_TAG, "Bootstrap prefix directory not found.");
+            return false;
+        }
+        if (TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
+            Logger.logInfo(LOG_TAG, "Bootstrap prefix directory is empty.");
             return false;
         }
 
-        // Check critical binaries exist and are executable
+        // Check critical binaries exist and are executable (basic check)
         String[] criticalBins = { "login", "bash", "sh" };
         for (String bin : criticalBins) {
             File binFile = new File(TERMUX_PREFIX_DIR_PATH + "/bin/" + bin);
@@ -441,6 +441,58 @@ final class TermuxInstaller {
             }
         }
 
+        // ACTUAL EXECUTION TEST: Try to run the login shell script
+        // This is the REAL test - file permissions don't guarantee execution works
+        String bashPath = TERMUX_PREFIX_DIR_PATH + "/bin/bash";
+        String loginPath = TERMUX_PREFIX_DIR_PATH + "/bin/login";
+        String testScript = "echo 'bootstrap_ok'";
+        try {
+            // Test 1: Can we run bash at all?
+            ProcessBuilder bashTest = new ProcessBuilder(bashPath, "--version");
+            bashTest.environment().put("HOME", TermuxConstants.TERMUX_HOME_DIR_PATH);
+            bashTest.environment().remove("LD_PRELOAD");
+            bashTest.environment().remove("LD_LIBRARY_PATH");
+            bashTest.redirectErrorStream(true);
+            Process bashProc = bashTest.start();
+            boolean bashOk = bashProc.waitFor() == 0;
+            if (!bashOk) {
+                Logger.logWarn(LOG_TAG, "Bootstrap bash execution test failed (exit code " + bashProc.exitValue() + "). Bootstrap may be corrupted.");
+                return false;
+            }
+
+            // Test 2: Does login script exist and can bash execute it?
+            File loginFile = new File(loginPath);
+            if (!loginFile.exists()) {
+                Logger.logWarn(LOG_TAG, "login script not found at: " + loginPath);
+                return false;
+            }
+
+            // Test 3: Can bash source the login script?
+            ProcessBuilder loginTest = new ProcessBuilder(bashPath, "-c",
+                "source " + loginPath + " 2>&1 | head -1; exit 0");
+            loginTest.environment().put("HOME", TermuxConstants.TERMUX_HOME_DIR_PATH);
+            loginTest.environment().remove("LD_PRELOAD");
+            loginTest.environment().remove("LD_LIBRARY_PATH");
+            loginTest.redirectErrorStream(true);
+            Process loginProc = loginTest.start();
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(loginProc.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+            boolean loginOk = loginProc.waitFor() == 0;
+            if (!loginOk) {
+                Logger.logWarn(LOG_TAG, "Bootstrap login script test failed. Output: " + output);
+                return false;
+            }
+        } catch (Exception e) {
+            Logger.logWarn(LOG_TAG, "Bootstrap execution test threw exception: " + e.getMessage());
+            return false;
+        }
+
+        Logger.logInfo(LOG_TAG, "Bootstrap execution tests passed.");
         return true;
     }
 

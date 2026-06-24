@@ -2,8 +2,8 @@ buildscript {
     repositories {
         maven { url 'https://mirrors.cloud.tencent.com/gradle/' }
         maven { url 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/' }
-        mavenCentral()
         google()
+        mavenCentral()
     }
     dependencies {
         classpath "com.android.tools.build:gradle:8.13.2"
