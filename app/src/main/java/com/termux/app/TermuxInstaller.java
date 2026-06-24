@@ -10,7 +10,7 @@ import android.system.Os;
 import android.util.Pair;
 import android.view.WindowManager;
 
-import com.termux.R;
+import com.kalinrx.R;
 import com.termux.shared.file.FileUtils;
 import com.termux.shared.termux.crash.TermuxCrashUtils;
 import com.termux.shared.termux.file.TermuxFileUtils;
@@ -28,6 +28,7 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.ZipEntry;
@@ -60,6 +61,9 @@ import static com.termux.shared.termux.TermuxConstants.TERMUX_STAGING_PREFIX_DIR
 final class TermuxInstaller {
 
     private static final String LOG_TAG = "TermuxInstaller";
+
+    private static final String OLD_PREFIX = "/data/data/com.termux";
+    private static final String NEW_PREFIX = "/data/data/com.kalinrx";
 
     /** Performs bootstrap setup if necessary. */
     static void setupBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
@@ -215,6 +219,9 @@ final class TermuxInstaller {
                     if (!TERMUX_STAGING_PREFIX_DIR.renameTo(TERMUX_PREFIX_DIR)) {
                         throw new RuntimeException("Moving termux prefix staging to prefix directory failed");
                     }
+
+                    Logger.logInfo(LOG_TAG, "Patching bootstrap files with new package name prefix...");
+                    patchBootstrapFiles(TERMUX_PREFIX_DIR_PATH);
 
                     Logger.logInfo(LOG_TAG, "Bootstrap packages installed successfully.");
 
@@ -382,5 +389,95 @@ final class TermuxInstaller {
     }
 
     public static native byte[] getZip();
+
+    private static void patchBootstrapFiles(String dirPath) {
+        try {
+            byte[] oldBytes = OLD_PREFIX.getBytes("UTF-8");
+            byte[] newBytes = NEW_PREFIX.getBytes("UTF-8");
+
+            File dir = new File(dirPath);
+            if (!dir.isDirectory()) return;
+
+            patchDirectory(dir, oldBytes, newBytes);
+            Logger.logInfo(LOG_TAG, "Bootstrap patching complete.");
+        } catch (Exception e) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to patch bootstrap files", e);
+        }
+    }
+
+    private static void patchDirectory(File dir, byte[] oldBytes, byte[] newBytes) {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+
+        for (File file : files) {
+            if (file.isDirectory()) {
+                patchDirectory(file, oldBytes, newBytes);
+            } else if (file.isFile() && !isBinaryBlacklisted(file.getName())) {
+                try {
+                    patchFile(file, oldBytes, newBytes);
+                } catch (Exception e) {
+                    // Skip files that can't be patched
+                }
+            }
+        }
+    }
+
+    private static boolean isBinaryBlacklisted(String name) {
+        return name.endsWith(".so") || name.endsWith(".a") ||
+               name.endsWith(".o") || name.equals("ld-linux-aarch64.so.1") ||
+               name.equals("ld.so") || name.startsWith("ld-");
+    }
+
+    private static void patchFile(File file, byte[] oldBytes, byte[] newBytes) throws Exception {
+        if (oldBytes.length != newBytes.length) {
+            return;
+        }
+
+        RandomAccessFile raf = new RandomAccessFile(file, "rw");
+        try {
+            long fileLen = raf.length();
+            if (fileLen > 100 * 1024 * 1024) {
+                return;
+            }
+
+            byte[] content = new byte[(int) fileLen];
+            raf.readFully(content);
+
+            boolean modified = false;
+            int idx = indexOfBytes(content, oldBytes);
+            while (idx != -1) {
+                System.arraycopy(newBytes, 0, content, idx, newBytes.length);
+                modified = true;
+                idx = indexOfBytes(content, oldBytes, idx + newBytes.length);
+            }
+
+            if (modified) {
+                raf.seek(0);
+                raf.write(content);
+                raf.setLength(content.length);
+            }
+        } finally {
+            raf.close();
+        }
+    }
+
+    private static int indexOfBytes(byte[] content, byte[] pattern) {
+        return indexOfBytes(content, pattern, 0);
+    }
+
+    private static int indexOfBytes(byte[] content, byte[] pattern, int fromIndex) {
+        if (pattern.length == 0 || fromIndex >= content.length) return -1;
+
+        outer:
+        for (int i = fromIndex; i <= content.length - pattern.length; i++) {
+            for (int j = 0; j < pattern.length; j++) {
+                if (content[i + j] != pattern[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
+    }
 
 }
