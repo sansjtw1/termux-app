@@ -3,7 +3,7 @@ package com.termux.app;
 import android.app.Application;
 import android.content.Context;
 
-import com.kalinrx.BuildConfig;
+import com.termux.BuildConfig;
 import com.termux.shared.errors.Error;
 import com.termux.shared.logger.Logger;
 import com.termux.shared.termux.TermuxBootstrap;
