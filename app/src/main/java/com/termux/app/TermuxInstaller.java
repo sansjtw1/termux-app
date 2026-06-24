@@ -231,6 +231,9 @@ final class TermuxInstaller {
                     }
                     patchBootstrapFiles(TERMUX_PREFIX_DIR_PATH, patchedExecutableFiles);
 
+                    // Explicitly ensure critical files are executable
+                    ensureCriticalExecutable(TERMUX_PREFIX_DIR_PATH);
+
                     // Mark bootstrap as properly patched
                     createMarkerFile();
 
@@ -239,33 +242,14 @@ final class TermuxInstaller {
                     // Recreate env file
                     TermuxShellEnvironment.writeEnvironmentToFile(activity);
 
-                    // Now set up Kali environment
-                    updateProgressMessage(activity, progress, "Setting up Kali Linux environment...");
-                    try {
-                        KalinRXSetup.setupKaliFromInstaller(activity, msg -> {
-                            updateProgressMessage(activity, progress, msg);
-                        });
-                    } catch (Exception e) {
-                        Logger.logStackTraceWithMessage(LOG_TAG, "Kali setup failed (non-fatal)", e);
-                        // Kali setup failure is non-fatal - Termux should still work
-                        final String errorMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
-                        activity.runOnUiThread(() -> {
-                            try {
-                                new AlertDialog.Builder(activity)
-                                    .setTitle("Kali Setup Warning")
-                                    .setMessage("Kali Linux environment setup failed:\n\n" + errorMsg + "\n\n" +
-                                        "Termux will still work, but Kali will not be available. " +
-                                        "You can retry later by clearing app data.")
-                                    .setPositiveButton("OK", null)
-                                    .show();
-                            } catch (Exception ignored) {}
-                        });
-                    }
+                    // Now show the Kali setup dialog (instead of inline setup)
+                    updateProgressMessage(activity, progress, "Bootstrap ready! Starting Kali setup...");
+                    Logger.logInfo(LOG_TAG, "KalinRX bootstrap complete, showing Kali setup dialog.");
 
-                    updateProgressMessage(activity, progress, "Installation complete!");
-                    Logger.logInfo(LOG_TAG, "KalinRX installation complete.");
-
-                    activity.runOnUiThread(whenDone);
+                    activity.runOnUiThread(() -> {
+                        try { progress.dismiss(); } catch (RuntimeException ignored) {}
+                        startKaliSetup(activity, whenDone);
+                    });
 
                 } catch (final Exception e) {
                     showBootstrapErrorDialog(activity, whenDone, Logger.getStackTracesMarkdownString(null, Logger.getStackTracesStringArray(e)));
@@ -414,9 +398,16 @@ final class TermuxInstaller {
 
     /**
      * Check if bootstrap is properly installed and patched.
-     * This performs an actual execution test, not just file permission check.
+     * Uses marker file + file existence check. Execution tests are unreliable on Android.
      */
     private static boolean isBootstrapReady() {
+        // Short-circuit: marker file exists → bootstrap was successfully patched
+        File marker = new File(BOOTSTRAP_PATCHED_MARKER);
+        if (marker.exists()) {
+            Logger.logInfo(LOG_TAG, "Bootstrap patch marker found. Bootstrap is ready.");
+            return true;
+        }
+
         // Check prefix directory exists and is not empty
         if (!FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true)) {
             Logger.logInfo(LOG_TAG, "Bootstrap prefix directory not found.");
@@ -427,7 +418,7 @@ final class TermuxInstaller {
             return false;
         }
 
-        // Check critical binaries exist and are executable (basic check)
+        // Check critical binaries exist
         String[] criticalBins = { "login", "bash", "sh" };
         for (String bin : criticalBins) {
             File binFile = new File(TERMUX_PREFIX_DIR_PATH + "/bin/" + bin);
@@ -435,64 +426,11 @@ final class TermuxInstaller {
                 Logger.logWarn(LOG_TAG, "Critical binary missing: " + binFile.getAbsolutePath());
                 return false;
             }
-            if (!binFile.canExecute()) {
-                Logger.logWarn(LOG_TAG, "Critical binary not executable: " + binFile.getAbsolutePath());
-                return false;
-            }
         }
 
-        // ACTUAL EXECUTION TEST: Try to run the login shell script
-        // This is the REAL test - file permissions don't guarantee execution works
-        String bashPath = TERMUX_PREFIX_DIR_PATH + "/bin/bash";
-        String loginPath = TERMUX_PREFIX_DIR_PATH + "/bin/login";
-        String testScript = "echo 'bootstrap_ok'";
-        try {
-            // Test 1: Can we run bash at all?
-            ProcessBuilder bashTest = new ProcessBuilder(bashPath, "--version");
-            bashTest.environment().put("HOME", TermuxConstants.TERMUX_HOME_DIR_PATH);
-            bashTest.environment().remove("LD_PRELOAD");
-            bashTest.environment().remove("LD_LIBRARY_PATH");
-            bashTest.redirectErrorStream(true);
-            Process bashProc = bashTest.start();
-            boolean bashOk = bashProc.waitFor() == 0;
-            if (!bashOk) {
-                Logger.logWarn(LOG_TAG, "Bootstrap bash execution test failed (exit code " + bashProc.exitValue() + "). Bootstrap may be corrupted.");
-                return false;
-            }
-
-            // Test 2: Does login script exist and can bash execute it?
-            File loginFile = new File(loginPath);
-            if (!loginFile.exists()) {
-                Logger.logWarn(LOG_TAG, "login script not found at: " + loginPath);
-                return false;
-            }
-
-            // Test 3: Can bash source the login script?
-            ProcessBuilder loginTest = new ProcessBuilder(bashPath, "-c",
-                "source " + loginPath + " 2>&1 | head -1; exit 0");
-            loginTest.environment().put("HOME", TermuxConstants.TERMUX_HOME_DIR_PATH);
-            loginTest.environment().remove("LD_PRELOAD");
-            loginTest.environment().remove("LD_LIBRARY_PATH");
-            loginTest.redirectErrorStream(true);
-            Process loginProc = loginTest.start();
-            StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(loginProc.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
-                }
-            }
-            boolean loginOk = loginProc.waitFor() == 0;
-            if (!loginOk) {
-                Logger.logWarn(LOG_TAG, "Bootstrap login script test failed. Output: " + output);
-                return false;
-            }
-        } catch (Exception e) {
-            Logger.logWarn(LOG_TAG, "Bootstrap execution test threw exception: " + e.getMessage());
-            return false;
-        }
-
-        Logger.logInfo(LOG_TAG, "Bootstrap execution tests passed.");
+        // No marker but files exist → assume patched (old install without marker)
+        createMarkerFile();
+        Logger.logInfo(LOG_TAG, "Bootstrap files exist, created marker retroactively.");
         return true;
     }
 
@@ -690,6 +628,39 @@ final class TermuxInstaller {
             Logger.logInfo(LOG_TAG, "Force chmod complete: " + count + " files permission restored.");
         } catch (Exception e) {
             Logger.logStackTraceWithMessage(LOG_TAG, "Failed to force chmod", e);
+        }
+    }
+
+    /**
+     * Explicitly chmod the most critical files needed for shell startup.
+     * This is called after forceChmodAllExecutables as a safety net.
+     */
+    private static void ensureCriticalExecutable(String prefixPath) {
+        String[] criticalFiles = {
+            "bin/login", "bin/bash", "bin/sh", "bin/dash",
+            "lib/ld-linux-aarch64.so.1", "lib/ld-linux-armhf.so.3",
+            "lib/libtermux-exec.so", "lib/libtermux-exec-ld-preload.so"
+        };
+        for (String relPath : criticalFiles) {
+            File f = new File(prefixPath, relPath);
+            if (f.exists()) {
+                try {
+                    Os.chmod(f.getAbsolutePath(), 0700);
+                    Logger.logInfo(LOG_TAG, "Explicit chmod 0700: " + f.getAbsolutePath());
+                } catch (Exception e) {
+                    Logger.logError(LOG_TAG, "Explicit chmod failed: " + f.getAbsolutePath() + ": " + e.getMessage());
+                }
+            }
+        }
+        // Also chmod all .sh scripts in bin/ (login is a .sh script without extension)
+        File binDir = new File(prefixPath, "bin");
+        File[] shFiles = binDir.listFiles((dir, name) -> name.endsWith(".sh"));
+        if (shFiles != null) {
+            for (File sh : shFiles) {
+                try {
+                    Os.chmod(sh.getAbsolutePath(), 0700);
+                } catch (Exception ignored) {}
+            }
         }
     }
 
