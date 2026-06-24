@@ -223,10 +223,19 @@ public class KalinRXSetup {
                 connection.setConnectTimeout(30000);
                 connection.setReadTimeout(300000);
                 connection.setRequestProperty("User-Agent", "KalinRX/1.0");
+                responseCode = connection.getResponseCode();
+            }
+
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                throw new RuntimeException("Download failed: HTTP " + responseCode + "\nURL: " + KALI_ROOTFS_URL);
             }
 
             long totalSize = connection.getContentLengthLong();
-            Logger.logInfo(LOG_TAG, "Downloading Kali rootfs (" + (totalSize / 1024 / 1024) + " MB)...");
+            if (totalSize <= 0) {
+                Logger.logWarn(LOG_TAG, "Unknown download size, continuing anyway...");
+            }
+
+            Logger.logInfo(LOG_TAG, "Downloading Kali rootfs (" + (totalSize > 0 ? (totalSize / 1024 / 1024) + " MB" : "unknown size") + ")...");
 
             try (InputStream in = new BufferedInputStream(connection.getInputStream());
                  OutputStream out = new FileOutputStream(destFile)) {
@@ -248,10 +257,21 @@ public class KalinRXSetup {
                         }
                     }
                 }
+
+                // Verify download
+                if (totalSize > 0 && downloaded != totalSize) {
+                    throw new RuntimeException("Download incomplete: expected " + totalSize + " bytes, got " + downloaded + " bytes");
+                }
             }
 
             Logger.logInfo(LOG_TAG, "Kali rootfs downloaded to: " + destFile.getAbsolutePath());
 
+        } catch (java.net.SocketTimeoutException e) {
+            throw new RuntimeException("Download timed out. Please check your network connection and try again.\nURL: " + KALI_ROOTFS_URL, e);
+        } catch (java.net.UnknownHostException e) {
+            throw new RuntimeException("Network error: Cannot reach GitHub.\nPlease check your internet connection.\nURL: " + KALI_ROOTFS_URL, e);
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Download failed: " + e.getMessage() + "\nURL: " + KALI_ROOTFS_URL, e);
         } finally {
             if (connection != null) {
                 connection.disconnect();

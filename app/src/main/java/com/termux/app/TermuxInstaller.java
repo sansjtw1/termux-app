@@ -27,10 +27,13 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.InputStreamReader;
 import java.io.RandomAccessFile;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -45,6 +48,9 @@ final class TermuxInstaller {
 
     private static final String OLD_PREFIX = "/data/data/com.termux";
     private static final String NEW_PREFIX = "/data/data/com.kalinrx";
+
+    private static final String BOOTSTRAP_PATCHED_MARKER =
+        TERMUX_PREFIX_DIR_PATH + "/.kalinrx_bootstrap_patched";
 
     /** Performs bootstrap setup if necessary. */
     static void setupBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
@@ -81,39 +87,28 @@ final class TermuxInstaller {
             return;
         }
 
-        // If prefix directory exists and is not empty, bootstrap is already installed.
-        if (FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true)) {
-            if (!TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
-                // Bootstrap already installed, but check if Kali needs setup
-                if (!KalinRXSetup.isKaliInstalled()) {
-                    // Kali not installed yet, run setup with progress dialog
-                    final ProgressDialog kaliProgress = ProgressDialog.show(activity, null,
-                        "Setting up KalinRX Kali Linux environment...", true, false);
-                    new Thread(() -> {
-                        try {
-                            KalinRXSetup.setupKaliFromInstaller(activity, msg -> {
-                                activity.runOnUiThread(() -> kaliProgress.setMessage(msg));
-                            });
-                        } catch (Exception e) {
-                            Logger.logStackTraceWithMessage(LOG_TAG, "Kali setup failed", e);
-                        } finally {
-                            activity.runOnUiThread(() -> {
-                                try { kaliProgress.dismiss(); } catch (RuntimeException ignored) {}
-                                whenDone.run();
-                            });
-                        }
-                    }).start();
-                    return;
-                }
+        // Check if bootstrap is properly installed and patched
+        boolean bootstrapReady = isBootstrapReady();
+
+        if (bootstrapReady) {
+            // Bootstrap is fine, check if Kali needs setup
+            if (!KalinRXSetup.isKaliInstalled()) {
+                startKaliSetup(activity, whenDone);
+            } else {
                 whenDone.run();
-                return;
             }
+            return;
+        } else if (FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true) &&
+                   !TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
+            // Bootstrap exists but is broken, log and reinstall
+            Logger.logWarn(LOG_TAG, "Bootstrap directory exists but is corrupted. Reinstalling...");
         } else if (FileUtils.fileExists(TERMUX_PREFIX_DIR_PATH, false)) {
             Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" does not exist but another file exists at its destination.");
         }
 
+        // Install bootstrap
         final ProgressDialog progress = ProgressDialog.show(activity, null,
-            activity.getString(R.string.bootstrap_installer_body), true, false);
+            "Installing KalinRX environment...", true, false);
         new Thread() {
             @Override
             public void run() {
@@ -156,6 +151,7 @@ final class TermuxInstaller {
 
                     final byte[] buffer = new byte[8096];
                     final List<Pair<String, String>> symlinks = new ArrayList<>(50);
+                    final Set<String> executableFiles = new HashSet<>();
 
                     final byte[] zipBytes = loadZipBytes();
                     try (ZipInputStream zipInput = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
@@ -195,9 +191,9 @@ final class TermuxInstaller {
                                         while ((readBytes = zipInput.read(buffer)) != -1)
                                             outStream.write(buffer, 0, readBytes);
                                     }
-                                    if (zipEntryName.startsWith("bin/") || zipEntryName.startsWith("libexec") ||
-                                        zipEntryName.startsWith("lib/apt/apt-helper") || zipEntryName.startsWith("lib/apt/methods")) {
+                                    if (isExecutablePath(zipEntryName)) {
                                         Os.chmod(targetFile.getAbsolutePath(), 0700);
+                                        executableFiles.add(targetFile.getAbsolutePath());
                                     }
                                 }
                             }
@@ -218,12 +214,15 @@ final class TermuxInstaller {
                     // Patch bootstrap files to use new package name
                     updateProgressMessage(activity, progress, "Patching bootstrap files for KalinRX...");
                     Logger.logInfo(LOG_TAG, "Patching bootstrap files with new package name prefix...");
-                    patchBootstrapFiles(TERMUX_PREFIX_DIR_PATH);
+                    Set<String> patchedExecutableFiles = new HashSet<>();
+                    for (String path : executableFiles) {
+                        String newPath = path.replace(TERMUX_STAGING_PREFIX_DIR_PATH, TERMUX_PREFIX_DIR_PATH);
+                        patchedExecutableFiles.add(newPath);
+                    }
+                    patchBootstrapFiles(TERMUX_PREFIX_DIR_PATH, patchedExecutableFiles);
 
-                    // Re-apply execute permissions after patching
-                    updateProgressMessage(activity, progress, "Fixing file permissions...");
-                    Logger.logInfo(LOG_TAG, "Re-applying execute permissions...");
-                    reapplyExecPermissions(TERMUX_PREFIX_DIR_PATH);
+                    // Mark bootstrap as properly patched
+                    createMarkerFile();
 
                     Logger.logInfo(LOG_TAG, "Bootstrap packages installed successfully.");
 
@@ -231,13 +230,26 @@ final class TermuxInstaller {
                     TermuxShellEnvironment.writeEnvironmentToFile(activity);
 
                     // Now set up Kali environment
-                    updateProgressMessage(activity, progress, "Setting up KalinRX Kali Linux environment...");
+                    updateProgressMessage(activity, progress, "Setting up Kali Linux environment...");
                     try {
                         KalinRXSetup.setupKaliFromInstaller(activity, msg -> {
                             updateProgressMessage(activity, progress, msg);
                         });
                     } catch (Exception e) {
                         Logger.logStackTraceWithMessage(LOG_TAG, "Kali setup failed (non-fatal)", e);
+                        // Kali setup failure is non-fatal - Termux should still work
+                        final String errorMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
+                        activity.runOnUiThread(() -> {
+                            try {
+                                new AlertDialog.Builder(activity)
+                                    .setTitle("Kali Setup Warning")
+                                    .setMessage("Kali Linux environment setup failed:\n\n" + errorMsg + "\n\n" +
+                                        "Termux will still work, but Kali will not be available. " +
+                                        "You can retry later by clearing app data.")
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                            } catch (Exception ignored) {}
+                        });
                     }
 
                     updateProgressMessage(activity, progress, "Installation complete!");
@@ -259,6 +271,94 @@ final class TermuxInstaller {
                 }
             }
         }.start();
+    }
+
+    private static void startKaliSetup(final Activity activity, final Runnable whenDone) {
+        final ProgressDialog kaliProgress = ProgressDialog.show(activity, null,
+            "Setting up KalinRX Kali Linux environment...", true, false);
+        new Thread(() -> {
+            try {
+                KalinRXSetup.setupKaliFromInstaller(activity, msg -> {
+                    activity.runOnUiThread(() -> {
+                        try { kaliProgress.setMessage(msg); } catch (Exception ignored) {}
+                    });
+                });
+            } catch (Exception e) {
+                Logger.logStackTraceWithMessage(LOG_TAG, "Kali setup failed", e);
+                final String errorMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
+                activity.runOnUiThread(() -> {
+                    try {
+                        new AlertDialog.Builder(activity)
+                            .setTitle("Kali Setup Failed")
+                            .setMessage("Failed to set up Kali Linux:\n\n" + errorMsg + "\n\n" +
+                                "Termux will still work. You can retry by clearing app data.")
+                            .setPositiveButton("OK", null)
+                            .show();
+                    } catch (Exception ignored) {}
+                });
+            } finally {
+                activity.runOnUiThread(() -> {
+                    try { kaliProgress.dismiss(); } catch (RuntimeException ignored) {}
+                    whenDone.run();
+                });
+            }
+        }).start();
+    }
+
+    /**
+     * Check if bootstrap is properly installed and patched.
+     */
+    private static boolean isBootstrapReady() {
+        // Check prefix directory exists and is not empty
+        if (!FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true)) return false;
+        if (TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) return false;
+
+        // Check marker file exists
+        File marker = new File(BOOTSTRAP_PATCHED_MARKER);
+        if (!marker.exists()) {
+            Logger.logWarn(LOG_TAG, "Bootstrap patch marker not found. Bootstrap may be corrupted.");
+            return false;
+        }
+
+        // Check critical binaries exist and are executable
+        String[] criticalBins = { "login", "bash", "sh" };
+        for (String bin : criticalBins) {
+            File binFile = new File(TERMUX_PREFIX_DIR_PATH + "/bin/" + bin);
+            if (!binFile.exists()) {
+                Logger.logWarn(LOG_TAG, "Critical binary missing: " + binFile.getAbsolutePath());
+                return false;
+            }
+            if (!binFile.canExecute()) {
+                Logger.logWarn(LOG_TAG, "Critical binary not executable: " + binFile.getAbsolutePath());
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static boolean isExecutablePath(String zipEntryName) {
+        return zipEntryName.startsWith("bin/") ||
+               zipEntryName.startsWith("libexec/") ||
+               zipEntryName.startsWith("sbin/") ||
+               zipEntryName.startsWith("lib/apt/apt-helper") ||
+               zipEntryName.startsWith("lib/apt/methods") ||
+               zipEntryName.endsWith("/apt-helper") ||
+               zipEntryName.endsWith("/methods");
+    }
+
+    private static void createMarkerFile() {
+        try {
+            File marker = new File(BOOTSTRAP_PATCHED_MARKER);
+            try (FileWriter fw = new FileWriter(marker)) {
+                fw.write("KalinRX bootstrap patched successfully\n");
+                fw.write("Old prefix: " + OLD_PREFIX + "\n");
+                fw.write("New prefix: " + NEW_PREFIX + "\n");
+            }
+            Logger.logInfo(LOG_TAG, "Bootstrap patch marker created at: " + BOOTSTRAP_PATCHED_MARKER);
+        } catch (Exception e) {
+            Logger.logError(LOG_TAG, "Failed to create bootstrap marker file: " + e.getMessage());
+        }
     }
 
     private static void updateProgressMessage(Activity activity, ProgressDialog progress, String message) {
@@ -397,7 +497,7 @@ final class TermuxInstaller {
 
     // ===== Bootstrap file patching =====
 
-    private static void patchBootstrapFiles(String dirPath) {
+    private static void patchBootstrapFiles(String dirPath, Set<String> executableFiles) {
         try {
             byte[] oldBytes = OLD_PREFIX.getBytes("UTF-8");
             byte[] newBytes = NEW_PREFIX.getBytes("UTF-8");
@@ -405,23 +505,49 @@ final class TermuxInstaller {
             File dir = new File(dirPath);
             if (!dir.isDirectory()) return;
 
-            patchDirectory(dir, oldBytes, newBytes);
-            Logger.logInfo(LOG_TAG, "Bootstrap patching complete.");
+            Set<String> modifiedFiles = new HashSet<>();
+            patchDirectory(dir, oldBytes, newBytes, modifiedFiles);
+
+            // Restore execute permissions on all files that were modified
+            int restoredCount = 0;
+            for (String path : modifiedFiles) {
+                if (executableFiles.contains(path) || isInExecutableDir(path, dirPath)) {
+                    try {
+                        Os.chmod(path, 0700);
+                        restoredCount++;
+                    } catch (Exception e) {
+                        Logger.logError(LOG_TAG, "Failed to restore permission: " + path);
+                    }
+                }
+            }
+            Logger.logInfo(LOG_TAG, "Bootstrap patching complete. Restored permissions on " + restoredCount + " files.");
         } catch (Exception e) {
             Logger.logStackTraceWithMessage(LOG_TAG, "Failed to patch bootstrap files", e);
         }
     }
 
-    private static void patchDirectory(File dir, byte[] oldBytes, byte[] newBytes) {
+    private static boolean isInExecutableDir(String filePath, String prefixPath) {
+        String rel = filePath.substring(prefixPath.length());
+        return rel.startsWith("/bin/") ||
+               rel.startsWith("/sbin/") ||
+               rel.startsWith("/libexec/") ||
+               rel.contains("/apt/apt-helper") ||
+               rel.contains("/apt/methods");
+    }
+
+    private static void patchDirectory(File dir, byte[] oldBytes, byte[] newBytes, Set<String> modifiedFiles) {
         File[] files = dir.listFiles();
         if (files == null) return;
 
         for (File file : files) {
             if (file.isDirectory()) {
-                patchDirectory(file, oldBytes, newBytes);
+                patchDirectory(file, oldBytes, newBytes, modifiedFiles);
             } else if (file.isFile() && !isBinaryBlacklisted(file.getName())) {
                 try {
-                    patchFile(file, oldBytes, newBytes);
+                    boolean modified = patchFile(file, oldBytes, newBytes);
+                    if (modified) {
+                        modifiedFiles.add(file.getAbsolutePath());
+                    }
                 } catch (Exception e) {
                     // Skip files that can't be patched
                 }
@@ -435,16 +561,16 @@ final class TermuxInstaller {
                name.equals("ld.so") || name.startsWith("ld-");
     }
 
-    private static void patchFile(File file, byte[] oldBytes, byte[] newBytes) throws Exception {
+    private static boolean patchFile(File file, byte[] oldBytes, byte[] newBytes) throws Exception {
         if (oldBytes.length != newBytes.length) {
-            return;
+            return false;
         }
 
         RandomAccessFile raf = new RandomAccessFile(file, "rw");
         try {
             long fileLen = raf.length();
             if (fileLen > 100 * 1024 * 1024) {
-                return;
+                return false;
             }
 
             byte[] content = new byte[(int) fileLen];
@@ -463,6 +589,8 @@ final class TermuxInstaller {
                 raf.write(content);
                 raf.setLength(content.length);
             }
+
+            return modified;
         } finally {
             raf.close();
         }
@@ -485,44 +613,5 @@ final class TermuxInstaller {
             return i;
         }
         return -1;
-    }
-
-    // ===== Fix execute permissions after patching =====
-
-    private static void reapplyExecPermissions(String dirPath) {
-        try {
-            File dir = new File(dirPath);
-            reapplyExecPermissionsRecursive(dir);
-            Logger.logInfo(LOG_TAG, "Execute permissions re-applied.");
-        } catch (Exception e) {
-            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to reapply permissions", e);
-        }
-    }
-
-    private static void reapplyExecPermissionsRecursive(File dir) {
-        File[] files = dir.listFiles();
-        if (files == null) return;
-
-        for (File file : files) {
-            if (file.isDirectory()) {
-                // Recurse into subdirectories, but skip certain dirs
-                String name = file.getName();
-                if (!name.equals("tmp") && !name.equals("home") && !name.equals("var")) {
-                    reapplyExecPermissionsRecursive(file);
-                }
-            } else if (file.isFile()) {
-                String path = file.getAbsolutePath();
-                String relPath = path.substring(TERMUX_PREFIX_DIR_PATH.length());
-                // Re-apply 0700 to all executable paths
-                if (relPath.startsWith("/bin/") || relPath.startsWith("/libexec") ||
-                    relPath.contains("/apt/apt-helper") || relPath.contains("/apt/methods")) {
-                    try {
-                        Os.chmod(path, 0700);
-                    } catch (Exception e) {
-                        Logger.logError(LOG_TAG, "Failed to chmod: " + path);
-                    }
-                }
-            }
-        }
     }
 }
