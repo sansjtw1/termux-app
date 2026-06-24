@@ -39,25 +39,6 @@ import static com.termux.shared.termux.TermuxConstants.TERMUX_PREFIX_DIR_PATH;
 import static com.termux.shared.termux.TermuxConstants.TERMUX_STAGING_PREFIX_DIR;
 import static com.termux.shared.termux.TermuxConstants.TERMUX_STAGING_PREFIX_DIR_PATH;
 
-/**
- * Install the Termux bootstrap packages if necessary by following the below steps:
- * <p/>
- * (1) If $PREFIX already exist, assume that it is correct and be done. Note that this relies on that we do not create a
- * broken $PREFIX directory below.
- * <p/>
- * (2) A progress dialog is shown with "Installing..." message and a spinner.
- * <p/>
- * (3) A staging directory, $STAGING_PREFIX, is cleared if left over from broken installation below.
- * <p/>
- * (4) The zip file is loaded from a shared library.
- * <p/>
- * (5) The zip, containing entries relative to the $PREFIX, is is downloaded and extracted by a zip input stream
- * continuously encountering zip file entries:
- * <p/>
- * (5.1) If the zip entry encountered is SYMLINKS.txt, go through it and remember all symlinks to setup.
- * <p/>
- * (5.2) For every other zip entry, extract it into $STAGING_PREFIX and set execute permissions if necessary.
- */
 final class TermuxInstaller {
 
     private static final String LOG_TAG = "TermuxInstaller";
@@ -70,13 +51,9 @@ final class TermuxInstaller {
         String bootstrapErrorMessage;
         Error filesDirectoryAccessibleError;
 
-        // This will also call Context.getFilesDir(), which should ensure that termux files directory
-        // is created if it does not already exist
         filesDirectoryAccessibleError = TermuxFileUtils.isTermuxFilesDirectoryAccessible(activity, true, true);
         boolean isFilesDirectoryAccessible = filesDirectoryAccessibleError == null;
 
-        // Termux can only be run as the primary user (device owner) since only that
-        // account has the expected file system paths. Verify that:
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !PackageUtils.isCurrentUserThePrimaryUser(activity)) {
             bootstrapErrorMessage = activity.getString(R.string.bootstrap_error_not_primary_user_message,
                 MarkdownUtils.getMarkdownCodeForString(TERMUX_PREFIX_DIR_PATH, false));
@@ -91,13 +68,11 @@ final class TermuxInstaller {
 
         if (!isFilesDirectoryAccessible) {
             bootstrapErrorMessage = Error.getMinimalErrorString(filesDirectoryAccessibleError);
-            //noinspection SdCardPath
             if (PackageUtils.isAppInstalledOnExternalStorage(activity) &&
                 !TermuxConstants.TERMUX_FILES_DIR_PATH.equals(activity.getFilesDir().getAbsolutePath().replaceAll("^/data/user/0/", "/data/data/"))) {
                 bootstrapErrorMessage += "\n\n" + activity.getString(R.string.bootstrap_error_installed_on_portable_sd,
                     MarkdownUtils.getMarkdownCodeForString(TERMUX_PREFIX_DIR_PATH, false));
             }
-
             Logger.logError(LOG_TAG, bootstrapErrorMessage);
             sendBootstrapCrashReportNotification(activity, bootstrapErrorMessage);
             MessageDialogUtils.showMessage(activity,
@@ -106,11 +81,30 @@ final class TermuxInstaller {
             return;
         }
 
-        // If prefix directory exists, even if its a symlink to a valid directory and symlink is not broken/dangling
+        // If prefix directory exists and is not empty, bootstrap is already installed.
         if (FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true)) {
-            if (TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
-                Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" exists but is empty or only contains specific unimportant files.");
-            } else {
+            if (!TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
+                // Bootstrap already installed, but check if Kali needs setup
+                if (!KalinRXSetup.isKaliInstalled()) {
+                    // Kali not installed yet, run setup with progress dialog
+                    final ProgressDialog kaliProgress = ProgressDialog.show(activity, null,
+                        "Setting up KalinRX Kali Linux environment...", true, false);
+                    new Thread(() -> {
+                        try {
+                            KalinRXSetup.setupKaliFromInstaller(activity, msg -> {
+                                activity.runOnUiThread(() -> kaliProgress.setMessage(msg));
+                            });
+                        } catch (Exception e) {
+                            Logger.logStackTraceWithMessage(LOG_TAG, "Kali setup failed", e);
+                        } finally {
+                            activity.runOnUiThread(() -> {
+                                try { kaliProgress.dismiss(); } catch (RuntimeException ignored) {}
+                                whenDone.run();
+                            });
+                        }
+                    }).start();
+                    return;
+                }
                 whenDone.run();
                 return;
             }
@@ -118,7 +112,8 @@ final class TermuxInstaller {
             Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" does not exist but another file exists at its destination.");
         }
 
-        final ProgressDialog progress = ProgressDialog.show(activity, null, activity.getString(R.string.bootstrap_installer_body), true, false);
+        final ProgressDialog progress = ProgressDialog.show(activity, null,
+            activity.getString(R.string.bootstrap_installer_body), true, false);
         new Thread() {
             @Override
             public void run() {
@@ -141,19 +136,21 @@ final class TermuxInstaller {
                         return;
                     }
 
-                    // Create prefix staging directory if it does not already exist and set required permissions
+                    // Create prefix staging directory
                     error = TermuxFileUtils.isTermuxPrefixStagingDirectoryAccessible(true, true);
                     if (error != null) {
                         showBootstrapErrorDialog(activity, whenDone, Error.getErrorMarkdownString(error));
                         return;
                     }
 
-                    // Create prefix directory if it does not already exist and set required permissions
+                    // Create prefix directory
                     error = TermuxFileUtils.isTermuxPrefixDirectoryAccessible(true, true);
                     if (error != null) {
                         showBootstrapErrorDialog(activity, whenDone, Error.getErrorMarkdownString(error));
                         return;
                     }
+
+                    updateProgressMessage(activity, progress, "Extracting bootstrap packages...");
 
                     Logger.logInfo(LOG_TAG, "Extracting bootstrap zip to prefix staging directory \"" + TERMUX_STAGING_PREFIX_DIR_PATH + "\".");
 
@@ -200,7 +197,6 @@ final class TermuxInstaller {
                                     }
                                     if (zipEntryName.startsWith("bin/") || zipEntryName.startsWith("libexec") ||
                                         zipEntryName.startsWith("lib/apt/apt-helper") || zipEntryName.startsWith("lib/apt/methods")) {
-                                        //noinspection OctalInteger
                                         Os.chmod(targetFile.getAbsolutePath(), 0700);
                                     }
                                 }
@@ -215,18 +211,37 @@ final class TermuxInstaller {
                     }
 
                     Logger.logInfo(LOG_TAG, "Moving termux prefix staging to prefix directory.");
-
                     if (!TERMUX_STAGING_PREFIX_DIR.renameTo(TERMUX_PREFIX_DIR)) {
                         throw new RuntimeException("Moving termux prefix staging to prefix directory failed");
                     }
 
+                    // Patch bootstrap files to use new package name
+                    updateProgressMessage(activity, progress, "Patching bootstrap files for KalinRX...");
                     Logger.logInfo(LOG_TAG, "Patching bootstrap files with new package name prefix...");
                     patchBootstrapFiles(TERMUX_PREFIX_DIR_PATH);
 
+                    // Re-apply execute permissions after patching
+                    updateProgressMessage(activity, progress, "Fixing file permissions...");
+                    Logger.logInfo(LOG_TAG, "Re-applying execute permissions...");
+                    reapplyExecPermissions(TERMUX_PREFIX_DIR_PATH);
+
                     Logger.logInfo(LOG_TAG, "Bootstrap packages installed successfully.");
 
-                    // Recreate env file since termux prefix was wiped earlier
+                    // Recreate env file
                     TermuxShellEnvironment.writeEnvironmentToFile(activity);
+
+                    // Now set up Kali environment
+                    updateProgressMessage(activity, progress, "Setting up KalinRX Kali Linux environment...");
+                    try {
+                        KalinRXSetup.setupKaliFromInstaller(activity, msg -> {
+                            updateProgressMessage(activity, progress, msg);
+                        });
+                    } catch (Exception e) {
+                        Logger.logStackTraceWithMessage(LOG_TAG, "Kali setup failed (non-fatal)", e);
+                    }
+
+                    updateProgressMessage(activity, progress, "Installation complete!");
+                    Logger.logInfo(LOG_TAG, "KalinRX installation complete.");
 
                     activity.runOnUiThread(whenDone);
 
@@ -246,10 +261,18 @@ final class TermuxInstaller {
         }.start();
     }
 
+    private static void updateProgressMessage(Activity activity, ProgressDialog progress, String message) {
+        activity.runOnUiThread(() -> {
+            try {
+                if (progress.isShowing()) {
+                    progress.setMessage(message);
+                }
+            } catch (Exception ignored) {}
+        });
+    }
+
     public static void showBootstrapErrorDialog(Activity activity, Runnable whenDone, String message) {
         Logger.logErrorExtended(LOG_TAG, "Bootstrap Error:\n" + message);
-
-        // Send a notification with the exception so that the user knows why bootstrap setup failed
         sendBootstrapCrashReportNotification(activity, message);
 
         activity.runOnUiThread(() -> {
@@ -272,9 +295,6 @@ final class TermuxInstaller {
 
     private static void sendBootstrapCrashReportNotification(Activity activity, String message) {
         final String title = TermuxConstants.TERMUX_APP_NAME + " Bootstrap Error";
-
-        // Add info of all install Termux plugin apps as well since their target sdk or installation
-        // on external/portable sd card can affect Termux app files directory access or exec.
         TermuxCrashUtils.sendCrashReportNotification(activity, LOG_TAG,
             title, null, "## " + title + "\n\n" + message + "\n\n" +
                 TermuxUtils.getTermuxDebugMarkdownString(activity),
@@ -303,9 +323,6 @@ final class TermuxInstaller {
                         return;
                     }
 
-                    Logger.logInfo(LOG_TAG, "Setting up storage symlinks at ~/storage/shared, ~/storage/downloads, ~/storage/dcim, ~/storage/pictures, ~/storage/music and ~/storage/movies for directories in \"" + Environment.getExternalStorageDirectory().getAbsolutePath() + "\".");
-
-                    // Get primary storage root "/storage/emulated/0" symlink
                     File sharedDir = Environment.getExternalStorageDirectory();
                     Os.symlink(sharedDir.getAbsolutePath(), new File(storageDir, "shared").getAbsolutePath());
 
@@ -335,33 +352,22 @@ final class TermuxInstaller {
                         Os.symlink(audiobooksDir.getAbsolutePath(), new File(storageDir, "audiobooks").getAbsolutePath());
                     }
 
-                    // Dir 0 should ideally be for primary storage
-                    // https://cs.android.com/android/platform/superproject/+/android-12.0.0_r32:frameworks/base/core/java/android/app/ContextImpl.java;l=818
-                    // https://cs.android.com/android/platform/superproject/+/android-12.0.0_r32:frameworks/base/core/java/android/os/Environment.java;l=219
-                    // https://cs.android.com/android/platform/superproject/+/android-12.0.0_r32:frameworks/base/core/java/android/os/Environment.java;l=181
-                    // https://cs.android.com/android/platform/superproject/+/android-12.0.0_r32:frameworks/base/services/core/java/com/android/server/StorageManagerService.java;l=3796
-                    // https://cs.android.com/android/platform/superproject/+/android-7.0.0_r36:frameworks/base/services/core/java/com/android/server/MountService.java;l=3053
-
-                    // Create "Android/data/com.termux" symlinks
                     File[] dirs = context.getExternalFilesDirs(null);
                     if (dirs != null && dirs.length > 0) {
                         for (int i = 0; i < dirs.length; i++) {
                             File dir = dirs[i];
                             if (dir == null) continue;
                             String symlinkName = "external-" + i;
-                            Logger.logInfo(LOG_TAG, "Setting up storage symlinks at ~/storage/" + symlinkName + " for \"" + dir.getAbsolutePath() + "\".");
                             Os.symlink(dir.getAbsolutePath(), new File(storageDir, symlinkName).getAbsolutePath());
                         }
                     }
 
-                    // Create "Android/media/com.termux" symlinks
                     dirs = context.getExternalMediaDirs();
                     if (dirs != null && dirs.length > 0) {
                         for (int i = 0; i < dirs.length; i++) {
                             File dir = dirs[i];
                             if (dir == null) continue;
                             String symlinkName = "media-" + i;
-                            Logger.logInfo(LOG_TAG, "Setting up storage symlinks at ~/storage/" + symlinkName + " for \"" + dir.getAbsolutePath() + "\".");
                             Os.symlink(dir.getAbsolutePath(), new File(storageDir, symlinkName).getAbsolutePath());
                         }
                     }
@@ -383,12 +389,13 @@ final class TermuxInstaller {
     }
 
     public static byte[] loadZipBytes() {
-        // Only load the shared library when necessary to save memory usage.
         System.loadLibrary("termux-bootstrap");
         return getZip();
     }
 
     public static native byte[] getZip();
+
+    // ===== Bootstrap file patching =====
 
     private static void patchBootstrapFiles(String dirPath) {
         try {
@@ -480,4 +487,42 @@ final class TermuxInstaller {
         return -1;
     }
 
+    // ===== Fix execute permissions after patching =====
+
+    private static void reapplyExecPermissions(String dirPath) {
+        try {
+            File dir = new File(dirPath);
+            reapplyExecPermissionsRecursive(dir);
+            Logger.logInfo(LOG_TAG, "Execute permissions re-applied.");
+        } catch (Exception e) {
+            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to reapply permissions", e);
+        }
+    }
+
+    private static void reapplyExecPermissionsRecursive(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null) return;
+
+        for (File file : files) {
+            if (file.isDirectory()) {
+                // Recurse into subdirectories, but skip certain dirs
+                String name = file.getName();
+                if (!name.equals("tmp") && !name.equals("home") && !name.equals("var")) {
+                    reapplyExecPermissionsRecursive(file);
+                }
+            } else if (file.isFile()) {
+                String path = file.getAbsolutePath();
+                String relPath = path.substring(TERMUX_PREFIX_DIR_PATH.length());
+                // Re-apply 0700 to all executable paths
+                if (relPath.startsWith("/bin/") || relPath.startsWith("/libexec") ||
+                    relPath.contains("/apt/apt-helper") || relPath.contains("/apt/methods")) {
+                    try {
+                        Os.chmod(path, 0700);
+                    } catch (Exception e) {
+                        Logger.logError(LOG_TAG, "Failed to chmod: " + path);
+                    }
+                }
+            }
+        }
+    }
 }

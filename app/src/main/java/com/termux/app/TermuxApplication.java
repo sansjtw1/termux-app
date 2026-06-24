@@ -71,22 +71,6 @@ public class TermuxApplication extends Application {
         if (isTermuxFilesDirectoryAccessible) {
             TermuxShellEnvironment.writeEnvironmentToFile(this);
         }
-
-        setupKaliInBackground();
-    }
-
-    private void setupKaliInBackground() {
-        new Thread(() -> {
-            try {
-                Logger.logInfo(LOG_TAG, "Starting KalinRX Kali environment setup in background...");
-                Context context = getApplicationContext();
-                KalinRXSetup.setupKaliEnvironment(context);
-                KalinRXSetup.createKaliAutoLaunch(context);
-                Logger.logInfo(LOG_TAG, "KalinRX Kali environment setup complete.");
-            } catch (Exception e) {
-                Logger.logStackTraceWithMessage(LOG_TAG, "Failed to set up Kali environment", e);
-            }
-        }).start();
     }
 
     public static void setLogConfig(Context context) {

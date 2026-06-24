@@ -1,5 +1,6 @@
 package com.termux.app;
 
+import android.app.Activity;
 import android.content.Context;
 
 import com.termux.shared.logger.Logger;
@@ -29,6 +30,10 @@ public class KalinRXSetup {
     private static final String PROOT_BIN = FILES_DIR + "/bin/proot";
     private static final String LOADER_BIN = FILES_DIR + "/bin/loader";
 
+    public interface ProgressCallback {
+        void onProgress(String message);
+    }
+
     public static boolean isKaliInstalled() {
         return new File(KALI_DIR).exists() && new File(KALI_DIR + "/.kali-config/kali-run").exists();
     }
@@ -37,35 +42,53 @@ public class KalinRXSetup {
         return new File(TAR_XZ_FILE).exists();
     }
 
-    public static void setupKaliEnvironment(Context context) {
-        Logger.logInfo(LOG_TAG, "Setting up KalinRX Kali Linux environment...");
+    /**
+     * Full Kali setup called from TermuxInstaller during bootstrap installation.
+     * Runs on the bootstrap thread, updates progress via callback.
+     */
+    public static void setupKaliFromInstaller(Activity activity, ProgressCallback progressCallback) throws Exception {
+        new File(FILES_DIR + "/bin").mkdirs();
+        new File(FILES_DIR + "/tmp").mkdirs();
 
-        try {
-            new File(FILES_DIR + "/bin").mkdirs();
-            new File(FILES_DIR + "/tmp").mkdirs();
+        // Step 1: Extract proot binaries
+        updateProgress(progressCallback, activity, "Extracting proot binaries...");
+        Logger.logInfo(LOG_TAG, "Extracting proot binaries...");
+        extractProotBinaries(activity);
 
-            extractProotBinaries(context);
-            extractKaliConfigAssets(context);
+        // Step 2: Extract Kali config
+        updateProgress(progressCallback, activity, "Extracting Kali configuration files...");
+        Logger.logInfo(LOG_TAG, "Extracting Kali config files...");
+        extractKaliConfigAssets(activity);
 
-            File tarFile = new File(TAR_XZ_FILE);
-            File kaliDir = new File(KALI_DIR);
+        // Step 3: Download Kali rootfs if needed
+        File tarFile = new File(TAR_XZ_FILE);
+        File kaliDir = new File(KALI_DIR);
 
-            if (!kaliDir.exists() || !new File(KALI_DIR + "/.kali-config/kali-run").exists()) {
-                if (!tarFile.exists()) {
-                    Logger.logInfo(LOG_TAG, "Kali rootfs not found. Downloading to local storage: " + TAR_XZ_FILE);
-                    downloadKaliRootfs(tarFile);
-                }
-
-                if (tarFile.exists() && tarFile.length() > 0) {
-                    Logger.logInfo(LOG_TAG, "Extracting Kali rootfs from local storage...");
-                    extractKaliRootfs(tarFile);
-                }
+        if (!kaliDir.exists() || !new File(KALI_DIR + "/.kali-config/kali-run").exists()) {
+            if (!tarFile.exists()) {
+                updateProgress(progressCallback, activity, "Downloading Kali Linux rootfs...");
+                Logger.logInfo(LOG_TAG, "Downloading Kali rootfs from: " + KALI_ROOTFS_URL);
+                downloadKaliRootfs(tarFile, progressCallback, activity);
             }
 
-            Logger.logInfo(LOG_TAG, "KalinRX Kali Linux environment setup complete.");
+            if (tarFile.exists() && tarFile.length() > 0) {
+                updateProgress(progressCallback, activity, "Extracting Kali Linux rootfs (this may take a while)...");
+                Logger.logInfo(LOG_TAG, "Extracting Kali rootfs...");
+                extractKaliRootfs(tarFile);
+            }
+        }
 
-        } catch (Exception e) {
-            Logger.logStackTraceWithMessage(LOG_TAG, "Failed to set up Kali environment", e);
+        // Step 4: Create auto-launch script
+        updateProgress(progressCallback, activity, "Configuring Kali auto-launch...");
+        Logger.logInfo(LOG_TAG, "Creating Kali auto-launch script...");
+        createKaliAutoLaunch(activity);
+
+        Logger.logInfo(LOG_TAG, "KalinRX Kali Linux environment setup complete.");
+    }
+
+    private static void updateProgress(ProgressCallback callback, Activity activity, String message) {
+        if (callback != null) {
+            callback.onProgress(message);
         }
     }
 
@@ -157,7 +180,6 @@ public class KalinRXSetup {
                 if (prootLib.exists()) {
                     copyFile(prootLib, prootDest);
                     prootDest.setExecutable(true);
-                    Logger.logInfo(LOG_TAG, "Extracted proot binary.");
                 }
 
                 File loaderDest = new File(LOADER_BIN);
@@ -177,7 +199,7 @@ public class KalinRXSetup {
         }
     }
 
-    private static void downloadKaliRootfs(File destFile) throws Exception {
+    private static void downloadKaliRootfs(File destFile, ProgressCallback progressCallback, Activity activity) throws Exception {
         URL url = new URL(KALI_ROOTFS_URL);
         HttpURLConnection connection = null;
 
@@ -204,23 +226,31 @@ public class KalinRXSetup {
             }
 
             long totalSize = connection.getContentLengthLong();
-            Logger.logInfo(LOG_TAG, "Downloading Kali rootfs to local storage (" + (totalSize / 1024 / 1024) + " MB)...");
+            Logger.logInfo(LOG_TAG, "Downloading Kali rootfs (" + (totalSize / 1024 / 1024) + " MB)...");
 
             try (InputStream in = new BufferedInputStream(connection.getInputStream());
                  OutputStream out = new FileOutputStream(destFile)) {
                 byte[] buffer = new byte[8192];
                 long downloaded = 0;
                 int read;
+                int lastReportedPercent = -1;
                 while ((read = in.read(buffer)) != -1) {
                     out.write(buffer, 0, read);
                     downloaded += read;
-                    if (downloaded % (1024 * 1024 * 50) == 0) {
-                        Logger.logInfo(LOG_TAG, "Downloaded: " + (downloaded / 1024 / 1024) + " MB / " + (totalSize / 1024 / 1024) + " MB");
+                    if (totalSize > 0) {
+                        int percent = (int) (downloaded * 100 / totalSize);
+                        if (percent != lastReportedPercent && percent % 10 == 0) {
+                            lastReportedPercent = percent;
+                            final String msg = "Downloading Kali Linux rootfs... " + percent + "% (" +
+                                (downloaded / 1024 / 1024) + " / " + (totalSize / 1024 / 1024) + " MB)";
+                            Logger.logInfo(LOG_TAG, msg);
+                            updateProgress(progressCallback, activity, msg);
+                        }
                     }
                 }
             }
 
-            Logger.logInfo(LOG_TAG, "Kali rootfs downloaded to local storage: " + destFile.getAbsolutePath());
+            Logger.logInfo(LOG_TAG, "Kali rootfs downloaded to: " + destFile.getAbsolutePath());
 
         } finally {
             if (connection != null) {
@@ -248,6 +278,7 @@ public class KalinRXSetup {
 
         if (exitCode != 0) {
             Logger.logError(LOG_TAG, "Failed to extract Kali rootfs. Exit code: " + exitCode);
+            throw new RuntimeException("Kali rootfs extraction failed with exit code: " + exitCode);
         } else {
             Logger.logInfo(LOG_TAG, "Kali rootfs extracted successfully to: " + KALI_DIR);
         }
